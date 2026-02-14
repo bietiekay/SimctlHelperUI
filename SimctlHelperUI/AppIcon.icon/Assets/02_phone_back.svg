@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+
+
+<defs>
+  <linearGradient id="glassFill" x1="280" y1="260" x2="740" y2="820" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.62"/>
+    <stop offset="0.55" stop-color="#EDEBFF" stop-opacity="0.34"/>
+    <stop offset="1" stop-color="#CFCBFF" stop-opacity="0.22"/>
+  </linearGradient>
+
+  <linearGradient id="glassFill2" x1="250" y1="320" x2="720" y2="860" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+    <stop offset="0.6" stop-color="#EFEFFF" stop-opacity="0.28"/>
+    <stop offset="1" stop-color="#D9D5FF" stop-opacity="0.18"/>
+  </linearGradient>
+
+  <linearGradient id="edgeStroke" x1="300" y1="240" x2="700" y2="860" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.80"/>
+    <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.35"/>
+  </linearGradient>
+
+  <filter id="phoneShadow" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="9" result="blur"/>
+    <feOffset dx="0" dy="10" result="off"/>
+    <feColorMatrix in="off" type="matrix"
+      values="0 0 0 0 0
+              0 0 0 0 0
+              0 0 0 0 0
+              0 0 0 0.22 0" result="shadow"/>
+    <feMerge>
+      <feMergeNode in="shadow"/>
+      <feMergeNode in="SourceGraphic"/>
+    </feMerge>
+  </filter>
+
+  <filter id="softInner" x="-20%" y="-20%" width="140%" height="140%">
+    <feGaussianBlur stdDeviation="5" result="b"/>
+    <feComposite in="b" in2="SourceGraphic" operator="atop" result="c"/>
+    <feMerge>
+      <feMergeNode in="SourceGraphic"/>
+      <feMergeNode in="c"/>
+    </feMerge>
+  </filter>
+</defs>
+
+<g filter="url(#phoneShadow)" transform="translate(20,-10) rotate(-10 600 420)">
+  <rect x="460" y="210" width="310" height="520" rx="86" ry="86" fill="url(#glassFill2)"/>
+  <rect x="460" y="210" width="310" height="520" rx="86" ry="86" fill="none" stroke="url(#edgeStroke)" stroke-width="14" stroke-opacity="0.75"/>
+  <!-- speaker notch -->
+  <rect x="565" y="252" width="110" height="18" rx="9" ry="9" fill="#FFFFFF" fill-opacity="0.30"/>
+  <!-- diagonal glass sheen -->
+  <path d="M470 300 L740 220 L770 290 L500 370 Z" fill="#FFFFFF" fill-opacity="0.12"/>
+</g>
+
+</svg>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+
+
+<defs>
+  <linearGradient id="rim" x1="120" y1="120" x2="420" y2="420" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+    <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+  </linearGradient>
+</defs>
+
+<path d="M140 260
+         C160 170, 220 120, 320 108
+         L700 80
+         C835 70, 915 145, 944 270
+         L944 340
+         C910 210, 830 155, 720 160
+         L320 186
+         C235 193, 175 220, 140 260 Z"
+      fill="url(#rim)"/>
+
+</svg>

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+
+
+<defs>
+  <linearGradient id="bgGrad" x1="200" y1="140" x2="860" y2="900" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#5A49E6"/>
+    <stop offset="0.55" stop-color="#3A2BB5"/>
+    <stop offset="1" stop-color="#1B1A66"/>
+  </linearGradient>
+
+  <radialGradient id="bgBloom" cx="760" cy="250" r="420" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#BBA9FF" stop-opacity="0.55"/>
+    <stop offset="0.35" stop-color="#BBA9FF" stop-opacity="0.18"/>
+    <stop offset="1" stop-color="#BBA9FF" stop-opacity="0"/>
+  </radialGradient>
+
+  <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="10" result="blur"/>
+    <feOffset dx="0" dy="12" result="off"/>
+    <feColorMatrix in="off" type="matrix"
+      values="0 0 0 0 0
+              0 0 0 0 0
+              0 0 0 0 0
+              0 0 0 0.25 0" result="shadow"/>
+    <feMerge>
+      <feMergeNode in="shadow"/>
+      <feMergeNode in="SourceGraphic"/>
+    </feMerge>
+  </filter>
+
+  <filter id="innerGlow" x="-20%" y="-20%" width="140%" height="140%">
+    <feGaussianBlur stdDeviation="8" result="b"/>
+    <feColorMatrix in="b" type="matrix"
+      values="0 0 0 0 1
+              0 0 0 0 1
+              0 0 0 0 1
+              0 0 0 0.18 0" result="g"/>
+    <feComposite in="g" in2="SourceGraphic" operator="in" result="c"/>
+    <feMerge>
+      <feMergeNode in="SourceGraphic"/>
+      <feMergeNode in="c"/>
+    </feMerge>
+  </filter>
+</defs>
+
+<g filter="url(#softShadow)">
+  <rect x="80" y="80" width="864" height="864" rx="210" ry="210" fill="url(#bgGrad)"/>
+</g>
+<rect x="80" y="80" width="864" height="864" rx="210" ry="210" fill="url(#bgBloom)"/>
+<rect x="80" y="80" width="864" height="864" rx="210" ry="210" fill="none" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="6" filter="url(#innerGlow)"/>
+
+</svg>
