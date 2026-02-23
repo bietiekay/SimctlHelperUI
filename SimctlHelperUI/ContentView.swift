@@ -9,6 +9,8 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = DeviceListViewModel()
+    @State private var showDeleteUnavailableConfirmation = false
+    @State private var isDeletingUnavailable = false
     
     var body: some View {
         HSplitView {
@@ -16,6 +18,14 @@ struct ContentView: View {
             actionsPanel
         }
         .frame(minWidth: 900, minHeight: 600)
+        .alert("Delete Unavailable Simulators", isPresented: $showDeleteUnavailableConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete All", role: .destructive) {
+                deleteUnavailableDevices()
+            }
+        } message: {
+            Text("This removes all unavailable simulators from the current list.")
+        }
     }
     
     private var deviceListView: some View {
@@ -35,7 +45,16 @@ struct ContentView: View {
             }) {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .disabled(viewModel.isLoading)
+            .disabled(viewModel.isLoading || isDeletingUnavailable)
+            
+            if viewModel.hasUnavailableDevices {
+                Button(role: .destructive, action: {
+                    showDeleteUnavailableConfirmation = true
+                }) {
+                    Label("Delete Unavailable", systemImage: "trash.slash")
+                }
+                .disabled(viewModel.isLoading || isDeletingUnavailable)
+            }
             
             Spacer()
             
@@ -112,6 +131,20 @@ struct ContentView: View {
         DeviceActionsView(viewModel: viewModel)
             .frame(width: 300)
             .frame(maxHeight: .infinity)
+    }
+    
+    private func deleteUnavailableDevices() {
+        isDeletingUnavailable = true
+        viewModel.errorMessage = nil
+        
+        Task {
+            do {
+                try await viewModel.deleteUnavailableDevices()
+            } catch {
+                viewModel.errorMessage = error.localizedDescription
+            }
+            isDeletingUnavailable = false
+        }
     }
 }
 

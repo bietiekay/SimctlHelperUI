@@ -38,6 +38,10 @@ class DeviceListViewModel: ObservableObject {
     @Published var sortOrder: SortOrder = .ascending
     @Published var selectedDevice: SimDevice?
     
+    var hasUnavailableDevices: Bool {
+        devices.contains { !$0.isAvailable }
+    }
+    
     private let service = SimctlService.shared
     private var runtimes: [String: SimRuntime] = [:]
     private var deviceTypes: [String: SimDeviceType] = [:]
@@ -221,6 +225,11 @@ class DeviceListViewModel: ObservableObject {
     
     func shutdownDevice(udid: String) async throws {
         try await service.shutdownDevice(udid: udid)
+        await refreshDevices()
+    }
+    
+    func deleteUnavailableDevices() async throws {
+        try await service.deleteUnavailableDevices()
         await refreshDevices()
     }
 }

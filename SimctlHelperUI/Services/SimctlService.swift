@@ -213,6 +213,10 @@ class SimctlService {
         _ = try await executeCommand(["delete", udid])
     }
     
+    func deleteUnavailableDevices() async throws {
+        _ = try await executeCommand(["delete", "unavailable"])
+    }
+    
     // MARK: - Boot Device
     
     func bootDevice(udid: String) async throws {

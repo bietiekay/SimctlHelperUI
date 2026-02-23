@@ -10,6 +10,7 @@ A macOS SwiftUI application that provides a graphical user interface for managin
 - **Device Management**:
   - Clone simulators with custom names
   - Delete simulators
+  - Delete all unavailable simulators in one action (`simctl delete unavailable`)
   - Boot and shutdown simulators
 - **Device Information**: View detailed information including:
   - Device name and UDID
@@ -51,6 +52,7 @@ A macOS SwiftUI application that provides a graphical user interface for managin
    - **Clone Device**: Create a copy of the selected device with a new name
    - **Boot/Shutdown**: Start or stop the selected simulator
    - **Delete Device**: Remove the simulator (with confirmation)
+5. If unavailable simulators exist, use **Delete Unavailable** in the top toolbar to remove all unavailable entries at once (with confirmation).
 
 ### Refreshing the Device List
 
