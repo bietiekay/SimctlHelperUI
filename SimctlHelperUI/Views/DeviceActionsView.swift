@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct DeviceActionsView: View {
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var viewModel: DeviceListViewModel
     @State private var showCloneDialog = false
     @State private var showDeleteConfirmation = false
@@ -63,6 +64,16 @@ struct DeviceActionsView: View {
                             .frame(maxWidth: .infinity)
                         }
                         .disabled(isPerformingAction)
+
+                        if device.isBooted {
+                            Button(action: {
+                                openWindow(id: "location-player", value: device.udid)
+                            }) {
+                                Label("Location Player", systemImage: "location")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .disabled(isPerformingAction)
+                        }
                         
                         // Delete Button
                         Button(role: .destructive, action: {

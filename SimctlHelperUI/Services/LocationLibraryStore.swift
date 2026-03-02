@@ -38,6 +38,14 @@ nonisolated final class LocationLibraryStore {
         return try decoder.decode(LocationLibrary.self, from: data)
     }
 
+    func decodeLibrary(from data: Data) throws -> LocationLibrary {
+        try decoder.decode(LocationLibrary.self, from: data)
+    }
+
+    func encodeLibrary(_ library: LocationLibrary) throws -> Data {
+        try encoder.encode(library)
+    }
+
     func save(_ library: LocationLibrary) throws {
         let fileURL = libraryURL
         let directoryURL = fileURL.deletingLastPathComponent()
@@ -46,7 +54,7 @@ nonisolated final class LocationLibraryStore {
             try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         }
 
-        let data = try encoder.encode(library)
+        let data = try encodeLibrary(library)
         try data.write(to: fileURL, options: [.atomic])
     }
 }

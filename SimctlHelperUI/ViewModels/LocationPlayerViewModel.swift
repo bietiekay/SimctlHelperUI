@@ -151,6 +151,114 @@ final class LocationPlayerViewModel: ObservableObject {
         }
     }
 
+    func exportLibraryData() -> Data? {
+        do {
+            return try libraryStore.encodeLibrary(
+                LocationLibrary(
+                    locations: locations,
+                    routes: routes,
+                    defaultLocationID: defaultLocationID
+                )
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func importLibrary(from fileURL: URL) -> LocationLibrary? {
+        errorMessage = nil
+
+        let hasSecurityScope = fileURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurityScope {
+                fileURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let data = try Data(contentsOf: fileURL)
+            return try libraryStore.decodeLibrary(from: data)
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func importSelection(locationIDs: Set<UUID>, routeIDs: Set<UUID>, from library: LocationLibrary) {
+        var importedLocations = 0
+        var importedRoutes = 0
+        var skippedLocations = 0
+        var skippedRoutes = 0
+        var importedLocationIDs: [UUID] = []
+        var importedRouteIDs: [UUID] = []
+
+        var existingLocationIDs = Set(locations.map(\.id))
+        var existingRouteIDs = Set(routes.map(\.id))
+
+        for location in library.locations where locationIDs.contains(location.id) {
+            do {
+                var normalized = location
+                normalized.normalizeName()
+                try normalized.validate()
+                if existingLocationIDs.contains(normalized.id) {
+                    normalized = SavedLocation(id: UUID(), name: normalized.name, point: normalized.point)
+                }
+                existingLocationIDs.insert(normalized.id)
+                locations.append(normalized)
+                importedLocationIDs.append(normalized.id)
+                importedLocations += 1
+            } catch {
+                skippedLocations += 1
+            }
+        }
+
+        for route in library.routes where routeIDs.contains(route.id) {
+            do {
+                var normalized = route
+                normalized.normalizeName()
+                try normalized.validate()
+                if existingRouteIDs.contains(normalized.id) {
+                    normalized = SavedRoute(
+                        id: UUID(),
+                        name: normalized.name,
+                        waypoints: normalized.waypoints,
+                        speedMetersPerSecond: normalized.speedMetersPerSecond,
+                        updateMode: normalized.updateMode
+                    )
+                }
+                existingRouteIDs.insert(normalized.id)
+                routes.append(normalized)
+                importedRouteIDs.append(normalized.id)
+                importedRoutes += 1
+            } catch {
+                skippedRoutes += 1
+            }
+        }
+
+        if defaultLocationID == nil {
+            defaultLocationID = locations.first?.id
+        }
+
+        if let firstImportedRouteID = importedRouteIDs.first {
+            selectedRouteID = firstImportedRouteID
+            selectedLocationID = nil
+        } else if let firstImportedLocationID = importedLocationIDs.first {
+            selectedLocationID = firstImportedLocationID
+            selectedRouteID = nil
+        } else {
+            selectedLocationID = locations.first?.id
+            selectedRouteID = nil
+        }
+
+        saveLibrary()
+        if skippedLocations + skippedRoutes > 0 {
+            errorMessage = "Imported \(importedLocations) location(s), \(importedRoutes) route(s). Skipped \(skippedLocations + skippedRoutes) invalid item(s)."
+        } else {
+            errorMessage = nil
+        }
+    }
+
     func selectLocation(_ id: UUID?) {
         selectedLocationID = id
         if id != nil {
@@ -165,14 +273,16 @@ final class LocationPlayerViewModel: ObservableObject {
         }
     }
 
-    func addLocation() {
-        let location = SavedLocation(name: "New Location", point: GeoPoint(lat: 0, lon: 0))
+    @discardableResult
+    func addLocation(at point: GeoPoint) -> UUID {
+        let location = SavedLocation(name: "New Location", point: point)
         locations.append(location)
         if defaultLocationID == nil {
             defaultLocationID = location.id
         }
         selectLocation(location.id)
         saveLibrary()
+        return location.id
     }
 
     func deleteSelectedLocation() {

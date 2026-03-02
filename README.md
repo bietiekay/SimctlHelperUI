@@ -1,104 +1,140 @@
 # SimctlHelperUI
 
-A macOS SwiftUI application that provides a graphical user interface for managing iOS simulators. SimctlHelperUI wraps the `xcrun simctl` command-line tool, making it easier to view, clone, delete, and control iOS simulators through an intuitive interface.
+A macOS SwiftUI application that provides a graphical interface for `xcrun simctl`.
+It helps manage iOS simulators and includes a dedicated Location Player for route and location simulation on booted devices.
 
 ![SimctlHelperUI Screenshot](screenshot/screenshot.png)
 
-## Features
+## Feature Overview
 
-- **Device List View**: Browse all available iOS simulators in a sortable table
-- **Device Management**:
-  - Clone simulators with custom names
-  - Delete simulators
-  - Delete all unavailable simulators in one action (`simctl delete unavailable`)
-  - Boot and shutdown simulators
-- **Location Player (Booted Devices)**:
-  - Open via context menu from a booted simulator row
-  - Manage reusable location and route presets
-  - Apply single locations (`simctl location set`)
-  - Play/pause/resume/stop waypoint routes with speed and interval/distance updates (`simctl location start`)
-  - Route playback is isolated per simulator UDID
-- **Device Information**: View detailed information including:
-  - Device name and UDID
-  - Current state (Booted/Shutdown)
-  - Availability status
-  - Device type (e.g., iPhone 17 Pro)
-  - Runtime version (e.g., iOS 26.2)
-- **Visual Indicators**: Color-coded status indicators for quick device state recognition
-- **Sortable Columns**: Sort devices by name, state, availability, device type, or runtime version
-- **Auto-refresh**: Automatically refreshes the device list after operations
+- Device table with sortable columns (name, state, availability, device type, runtime).
+- Simulator management:
+  - Boot / Shutdown
+  - Clone
+  - Delete
+  - Delete unavailable devices
+- Location Player for booted devices:
+  - Open from row context menu (`Open Location Player`)
+  - Open by double-clicking a booted device row
+  - Open from the action panel button on booted selected devices
+- Per-device route playback control using `xcrun simctl location`:
+  - Play / Pause / Resume / Stop
+  - Reset to configured default location
+  - Isolated sessions per simulator UDID
+- Location and route library management:
+  - Saved locations and saved routes
+  - GPX route import
+  - Library export/import as JSON
+  - Selective import (choose which locations/routes to import)
+
+## Location Player
+
+The Location Player opens in its own window and is bound to a single simulator UDID.
+
+### Location Features
+
+- Apply a static location with `simctl location <udid> set <lat>,<lon>`
+- Edit coordinates manually
+- Edit location on map
+
+### Route Features
+
+- Waypoint-based routes using `simctl location <udid> start ...`
+- Route parameters:
+  - Speed (`--speed`)
+  - Update mode interval (`--interval`) or distance (`--distance`)
+- Playback controls:
+  - `Play` starts route simulation
+  - `Pause/Resume` uses process signals (`SIGSTOP` / `SIGCONT`)
+  - `Stop` terminates route process and clears simulated location
+
+### Map Editing
+
+- Click to place points
+- Drag-and-drop existing waypoint markers to reposition them
+- Numbered waypoint markers
+- Add mode toggle with visual state
+- Search field above map to jump to places (`MKLocalSearch`)
+- Zoom controls (`+` / `-`)
+
+## Library Import/Export
+
+- `Export All` writes the full location/route library to one JSON file.
+- `Import...` reads a JSON library file and opens a selection sheet.
+- In the selection sheet you can:
+  - Select all/none for locations
+  - Select all/none for routes
+  - Import only chosen entries
+- Import behavior:
+  - Validates entries before import
+  - Preserves existing data
+  - Resolves ID collisions by generating new UUIDs
 
 ## Requirements
 
-- macOS (tested on macOS 14+)
-- Xcode with Command Line Tools installed
-- iOS Simulator runtime installed
+- macOS 14+
+- Xcode with Command Line Tools
+- iOS Simulator runtimes installed
 
 ## Installation
 
-1. Clone the repository:
+1. Clone repository:
    ```bash
    git clone https://github.com/yourusername/SimctlHelperUI.git
    cd SimctlHelperUI
    ```
-
-2. Open the project in Xcode:
+2. Open project:
    ```bash
    open SimctlHelperUI.xcodeproj
    ```
-
-3. Build and run the project (⌘R) or create an archive for distribution.
+3. Build and run (`Cmd+R`).
 
 ## Usage
 
-1. Launch SimctlHelperUI
-2. The app will automatically load all available iOS simulators
-3. Select a device from the list to view its details and perform actions
-4. Use the action panel on the right to:
-   - **Clone Device**: Create a copy of the selected device with a new name
-   - **Boot/Shutdown**: Start or stop the selected simulator
-   - **Delete Device**: Remove the simulator (with confirmation)
-5. For booted devices, right-click the device in the table and choose **Open Location Player**.
-6. In the Location Player window you can:
-   - Select or edit saved locations and routes
-   - Configure route speed and update mode (`interval` or `distance`)
-   - Control playback using **Play**, **Pause/Resume**, and **Stop**
-5. If unavailable simulators exist, use **Delete Unavailable** in the top toolbar to remove all unavailable entries at once (with confirmation).
-
-### Refreshing the Device List
-
-Click the "Refresh" button in the toolbar or select a different device to automatically refresh the list.
+1. Launch SimctlHelperUI.
+2. Select a device in the device table.
+3. Use the right action panel for clone/boot/shutdown/delete.
+4. Open Location Player for booted devices:
+   - context menu, or
+   - double-click on row, or
+   - action panel button.
+5. In Location Player:
+   - manage locations/routes,
+   - import GPX routes,
+   - play/pause/resume/stop route playback,
+   - export/import full library JSON.
 
 ## Architecture
 
-The app follows the Model-View-ViewModel (MVVM) architecture:
+The app follows MVVM.
 
-- **Models** (`SimctlModels.swift`): Data structures for simulators, runtimes, and device types
-- **Services** (`SimctlService.swift`): Executes `xcrun simctl` commands and handles JSON parsing
-- **ViewModels** (`DeviceListViewModel.swift`): Manages application state, sorting, and device operations
-- **Views**: SwiftUI interface components for displaying and interacting with devices
+- Models: simulator and location domain models (`SimctlModels.swift`, `LocationModels.swift`)
+- Services:
+  - `SimctlService`: command execution and session control for simctl
+  - `LocationLibraryStore`: persistence for location/route library
+  - `GPXRouteImporter`: GPX parsing into saved routes
+- ViewModels:
+  - `DeviceListViewModel`
+  - `LocationPlayerViewModel`
+- Views:
+  - Main device list + actions
+  - `LocationPlayerView` and map editing sheets
 
-## Technical Details
+## Recent Changes (Documented)
 
-- Built with SwiftUI for macOS
-- Uses `Process` API to execute `xcrun simctl` commands
-- Asynchronous command execution with proper error handling
-- Thread-safe data collection for command output
-- JSON parsing using `Codable` protocols
+- Added Location Player access via:
+  - booted row context menu,
+  - double-click on booted row,
+  - action panel button.
+- Added robust map workflow for location and waypoint editing.
+- Added waypoint drag-and-drop with numbered markers.
+- Added map search and zoom controls.
+- Added fixed bottom action bar in map editor to keep save/cancel visible.
+- Added Add Mode toggle behavior with active highlighting.
+- Added GPX route import.
+- Added library JSON export/import with selective import dialog.
+- Added ignore rules for Xcode user data (`**/xcuserdata/`, `*.xcuserstate`).
 
 ## License
 
-This project is licensed under the BSD-2-Clause License - see the [LICENSE.md](LICENSE.md) file for details.
-
-## Author
-
-Daniel Kirstenpfad - [https://schrankmonster.de](https://schrankmonster.de)
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Acknowledgments
-
-- Built using Apple's `xcrun simctl` command-line tool
-- Uses SwiftUI for the user interface
+BSD-2-Clause. See [LICENSE.md](LICENSE.md).

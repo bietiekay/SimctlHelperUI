@@ -1,14 +1,20 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import MapKit
 
 struct LocationPlayerView: View {
     @StateObject var viewModel: LocationPlayerViewModel
     @State private var showGPXImporter = false
+    @State private var showLibraryImporter = false
+    @State private var showLibraryExporter = false
+    @State private var mapPickerContext: MapPickerContext?
     @State private var selectedLocationID: UUID?
     @State private var selectedRouteID: UUID?
     @State private var locationDraft: SavedLocation?
     @State private var routeDraft: SavedRoute?
     @State private var isSyncingSelection = false
+    @State private var libraryExportDocument = LocationLibraryDocument(data: Data())
+    @State private var importSelectionContext: ImportSelectionContext?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,6 +64,47 @@ struct LocationPlayerView: View {
         .onChange(of: viewModel.routes) { _, _ in
             syncRouteDraft()
         }
+        .sheet(item: $mapPickerContext) { context in
+            CoordinatePickerSheet(
+                title: context.title,
+                subtitle: context.subtitle,
+                mode: context.mode,
+                initialPoint: context.initialPoint,
+                existingWaypoints: context.existingWaypoints
+            ) { output in
+                switch output {
+                case .point(let selectedPoint):
+                    let point = GeoPoint(lat: selectedPoint.latitude, lon: selectedPoint.longitude)
+                    switch context.mode {
+                    case .addLocation:
+                        _ = viewModel.addLocation(at: point)
+                        syncSelectionFromViewModel()
+                    case .editLocation(let locationID):
+                        guard var location = viewModel.locations.first(where: { $0.id == locationID }) else { return }
+                        location.point.lat = point.lat
+                        location.point.lon = point.lon
+                        locationDraft = location
+                        viewModel.replaceLocation(location)
+                    case .editWaypoints:
+                        break
+                    }
+                case .waypoints(let updatedWaypoints):
+                    updateRouteDraft { draft in
+                        draft.waypoints = updatedWaypoints
+                    }
+                }
+            }
+        }
+        .sheet(item: $importSelectionContext) { context in
+            LibraryImportSelectionSheet(library: context.library) { selectedLocationIDs, selectedRouteIDs in
+                viewModel.importSelection(
+                    locationIDs: selectedLocationIDs,
+                    routeIDs: selectedRouteIDs,
+                    from: context.library
+                )
+                syncSelectionFromViewModel()
+            }
+        }
         .fileImporter(
             isPresented: $showGPXImporter,
             allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml],
@@ -69,6 +116,30 @@ struct LocationPlayerView: View {
                 viewModel.importRoute(from: fileURL)
                 syncSelectionFromViewModel()
             case .failure(let error):
+                viewModel.errorMessage = error.localizedDescription
+            }
+        }
+        .fileImporter(
+            isPresented: $showLibraryImporter,
+            allowedContentTypes: [.json],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let fileURL = urls.first else { return }
+                guard let importedLibrary = viewModel.importLibrary(from: fileURL) else { return }
+                importSelectionContext = ImportSelectionContext(library: importedLibrary)
+            case .failure(let error):
+                viewModel.errorMessage = error.localizedDescription
+            }
+        }
+        .fileExporter(
+            isPresented: $showLibraryExporter,
+            document: libraryExportDocument,
+            contentType: .json,
+            defaultFilename: libraryExportFilename
+        ) { result in
+            if case .failure(let error) = result {
                 viewModel.errorMessage = error.localizedDescription
             }
         }
@@ -124,8 +195,7 @@ struct LocationPlayerView: View {
 
                     HStack {
                         Button("Add") {
-                            viewModel.addLocation()
-                            syncSelectionFromViewModel()
+                            openLocationMapPicker()
                         }
                         Button("Delete") {
                             viewModel.deleteSelectedLocation()
@@ -167,6 +237,18 @@ struct LocationPlayerView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            }
+
+            GroupBox("Library File") {
+                HStack {
+                    Button("Export All") {
+                        beginLibraryExport()
+                    }
+                    Button("Import...") {
+                        showLibraryImporter = true
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Spacer()
@@ -226,6 +308,10 @@ struct LocationPlayerView: View {
                 viewModel.applySelectedLocation()
             }
             .disabled(!viewModel.isDeviceBooted)
+
+            Button("Edit On Map") {
+                openLocationEditMapPicker(location)
+            }
         }
         .padding()
         .background(Color(NSColor.controlBackgroundColor))
@@ -319,10 +405,8 @@ struct LocationPlayerView: View {
                         .font(.subheadline)
                         .fontWeight(.semibold)
                     Spacer()
-                    Button("Add Waypoint") {
-                        updateRouteDraft { draft in
-                            draft.waypoints.append(GeoPoint(lat: 0, lon: 0))
-                        }
+                    Button("Edit On Map") {
+                        openWaypointMapPicker()
                     }
                 }
 
@@ -485,5 +569,646 @@ struct LocationPlayerView: View {
 
     private func waypointLongitude(for id: UUID) -> Double? {
         routeDraft?.waypoints.first(where: { $0.id == id })?.lon
+    }
+
+    private func openLocationMapPicker() {
+        let initialPoint = locationDraft?.point
+            ?? routeDraft?.waypoints.last
+            ?? viewModel.locations.first?.point
+            ?? GeoPoint(lat: 37.3349, lon: -122.0090)
+
+        mapPickerContext = MapPickerContext(
+            mode: .addLocation,
+            title: "Choose Location Point",
+            subtitle: "Click on the map to place the new saved location.",
+            initialPoint: initialPoint,
+            existingWaypoints: []
+        )
+    }
+
+    private func openLocationEditMapPicker(_ location: SavedLocation) {
+        mapPickerContext = MapPickerContext(
+            mode: .editLocation(locationID: location.id),
+            title: "Edit Location Point",
+            subtitle: "Click on the map to move this location.",
+            initialPoint: location.point,
+            existingWaypoints: []
+        )
+    }
+
+    private func openWaypointMapPicker() {
+        let existingWaypoints = routeDraft?.waypoints ?? []
+        let initialPoint = existingWaypoints.last
+            ?? locationDraft?.point
+            ?? viewModel.locations.first?.point
+            ?? GeoPoint(lat: 37.3349, lon: -122.0090)
+
+        mapPickerContext = MapPickerContext(
+            mode: .editWaypoints,
+            title: "Edit Waypoints",
+            subtitle: "Select a waypoint to move, or add a new one by clicking on the map.",
+            initialPoint: initialPoint,
+            existingWaypoints: existingWaypoints
+        )
+    }
+
+    private func beginLibraryExport() {
+        guard let data = viewModel.exportLibraryData() else { return }
+        libraryExportDocument = LocationLibraryDocument(data: data)
+        showLibraryExporter = true
+    }
+
+    private var libraryExportFilename: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return "location-library-\(formatter.string(from: Date()))"
+    }
+}
+
+private struct ImportSelectionContext: Identifiable {
+    let id = UUID()
+    let library: LocationLibrary
+}
+
+private struct LocationLibraryDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+
+    var data: Data
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        self.data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
+}
+
+private struct LibraryImportSelectionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let library: LocationLibrary
+    let onImport: (Set<UUID>, Set<UUID>) -> Void
+
+    @State private var selectedLocationIDs: Set<UUID>
+    @State private var selectedRouteIDs: Set<UUID>
+
+    init(library: LocationLibrary, onImport: @escaping (Set<UUID>, Set<UUID>) -> Void) {
+        self.library = library
+        self.onImport = onImport
+        _selectedLocationIDs = State(initialValue: Set(library.locations.map(\.id)))
+        _selectedRouteIDs = State(initialValue: Set(library.routes.map(\.id)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Import Selection")
+                .font(.headline)
+            Text("Waehle aus, welche Locations und Routen importiert werden sollen.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            GroupBox("Locations (\(selectedLocationIDs.count)/\(library.locations.count))") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Button("All") {
+                            selectedLocationIDs = Set(library.locations.map(\.id))
+                        }
+                        Button("None") {
+                            selectedLocationIDs.removeAll()
+                        }
+                    }
+
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 6) {
+                            ForEach(library.locations) { location in
+                                Toggle(
+                                    location.name,
+                                    isOn: Binding(
+                                        get: { selectedLocationIDs.contains(location.id) },
+                                        set: { isOn in
+                                            if isOn {
+                                                selectedLocationIDs.insert(location.id)
+                                            } else {
+                                                selectedLocationIDs.remove(location.id)
+                                            }
+                                        }
+                                    )
+                                )
+                                .toggleStyle(.checkbox)
+                            }
+                        }
+                    }
+                    .frame(height: 140)
+                }
+            }
+
+            GroupBox("Routes (\(selectedRouteIDs.count)/\(library.routes.count))") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Button("All") {
+                            selectedRouteIDs = Set(library.routes.map(\.id))
+                        }
+                        Button("None") {
+                            selectedRouteIDs.removeAll()
+                        }
+                    }
+
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 6) {
+                            ForEach(library.routes) { route in
+                                Toggle(
+                                    route.name,
+                                    isOn: Binding(
+                                        get: { selectedRouteIDs.contains(route.id) },
+                                        set: { isOn in
+                                            if isOn {
+                                                selectedRouteIDs.insert(route.id)
+                                            } else {
+                                                selectedRouteIDs.remove(route.id)
+                                            }
+                                        }
+                                    )
+                                )
+                                .toggleStyle(.checkbox)
+                            }
+                        }
+                    }
+                    .frame(height: 140)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                Button("Import Selection") {
+                    onImport(selectedLocationIDs, selectedRouteIDs)
+                    dismiss()
+                }
+                .disabled(selectedLocationIDs.isEmpty && selectedRouteIDs.isEmpty)
+            }
+        }
+        .padding()
+        .frame(minWidth: 520, minHeight: 520)
+    }
+}
+
+private struct MapPickerContext: Identifiable {
+    enum Mode {
+        case addLocation
+        case editLocation(locationID: UUID)
+        case editWaypoints
+    }
+
+    let id = UUID()
+    let mode: Mode
+    let title: String
+    let subtitle: String
+    let initialPoint: GeoPoint
+    let existingWaypoints: [GeoPoint]
+}
+
+private enum CoordinatePickerOutput {
+    case point(CLLocationCoordinate2D)
+    case waypoints([GeoPoint])
+}
+
+private struct CoordinatePickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let title: String
+    let subtitle: String
+    let mode: MapPickerContext.Mode
+    let initialPoint: GeoPoint
+    let existingWaypoints: [GeoPoint]
+    let onConfirm: (CoordinatePickerOutput) -> Void
+
+    @State private var cameraPosition: MapCameraPosition
+    @State private var visibleRegion: MKCoordinateRegion
+    @State private var selectedCoordinate: CLLocationCoordinate2D?
+    @State private var editableWaypoints: [GeoPoint]
+    @State private var movingWaypointID: UUID?
+    @State private var isAddModeEnabled: Bool
+    @State private var searchQuery: String
+    @State private var searchStatusMessage: String?
+    @State private var isSearching: Bool
+
+    init(
+        title: String,
+        subtitle: String,
+        mode: MapPickerContext.Mode,
+        initialPoint: GeoPoint,
+        existingWaypoints: [GeoPoint],
+        onConfirm: @escaping (CoordinatePickerOutput) -> Void
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.mode = mode
+        self.initialPoint = initialPoint
+        self.existingWaypoints = existingWaypoints
+        self.onConfirm = onConfirm
+
+        let region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: initialPoint.lat, longitude: initialPoint.lon),
+            span: MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.08)
+        )
+        _cameraPosition = State(initialValue: .region(region))
+        _visibleRegion = State(initialValue: region)
+        _editableWaypoints = State(initialValue: existingWaypoints)
+        _isAddModeEnabled = State(initialValue: true)
+        _searchQuery = State(initialValue: "")
+        _searchStatusMessage = State(initialValue: nil)
+        _isSearching = State(initialValue: false)
+        if case .addLocation = mode {
+            _selectedCoordinate = State(
+                initialValue: CLLocationCoordinate2D(latitude: initialPoint.lat, longitude: initialPoint.lon)
+            )
+        } else if case .editLocation = mode {
+            _selectedCoordinate = State(
+                initialValue: CLLocationCoordinate2D(latitude: initialPoint.lat, longitude: initialPoint.lon)
+            )
+        } else {
+            _selectedCoordinate = State(initialValue: nil)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(title)
+                        .font(.headline)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    HStack(spacing: 8) {
+                        TextField("Ort suchen (z. B. Berlin Hbf)", text: $searchQuery)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit {
+                                runLocationSearch()
+                            }
+
+                        Button("Suchen") {
+                            runLocationSearch()
+                        }
+                        .disabled(searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSearching)
+                    }
+
+                    if let searchStatusMessage {
+                        Text(searchStatusMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    MapReader { proxy in
+                        Map(position: $cameraPosition) {
+                            if displayedWaypoints.count > 1 {
+                                MapPolyline(coordinates: displayedWaypointsCoordinates)
+                                    .stroke(.blue, lineWidth: 2)
+                            }
+
+                            ForEach(Array(displayedWaypoints.enumerated()), id: \.element.id) { index, waypoint in
+                                Annotation("", coordinate: CLLocationCoordinate2D(latitude: waypoint.lat, longitude: waypoint.lon)) {
+                                    waypointBadge(index: index + 1, isSelected: waypoint.id == movingWaypointID)
+                                        .onTapGesture {
+                                            guard usesWaypointEditor else { return }
+                                            movingWaypointID = waypoint.id
+                                            isAddModeEnabled = false
+                                        }
+                                        .highPriorityGesture(
+                                            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                                                .onChanged { value in
+                                                    guard usesWaypointEditor else { return }
+                                                    movingWaypointID = waypoint.id
+                                                    isAddModeEnabled = false
+                                                    guard let coordinate = proxy.convert(value.location, from: .global) else { return }
+                                                    moveWaypoint(withID: waypoint.id, to: coordinate)
+                                                }
+                                        )
+                                }
+                            }
+
+                            if usesPointPicker, let selectedCoordinate {
+                                Marker("New", coordinate: selectedCoordinate)
+                                    .tint(.red)
+                            }
+                        }
+                        .mapStyle(.hybrid(elevation: .realistic))
+                        .onMapCameraChange(frequency: .continuous) { context in
+                            visibleRegion = context.region
+                        }
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                                .onEnded { value in
+                            // Treat short drag as a mouse click so macOS interaction is predictable.
+                            let deltaX = value.location.x - value.startLocation.x
+                            let deltaY = value.location.y - value.startLocation.y
+                            let movedDistance = sqrt((deltaX * deltaX) + (deltaY * deltaY))
+                            guard movedDistance < 4 else { return }
+
+                            if let coordinate = proxy.convert(value.location, from: .local) {
+                                handleMapTap(coordinate)
+                            }
+                        })
+                        .overlay(alignment: .topTrailing) {
+                            mapZoomControls
+                        }
+                    }
+                    .frame(minHeight: 420)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    if usesWaypointEditor {
+                        waypointEditorControls
+                    }
+
+                    Text(selectionText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                if usesPointPicker {
+                    Button("Use Point") {
+                        guard let selectedCoordinate else { return }
+                        onConfirm(.point(selectedCoordinate))
+                        dismiss()
+                    }
+                    .disabled(selectedCoordinate == nil)
+                } else {
+                    Button("Use Waypoints") {
+                        onConfirm(.waypoints(editableWaypoints))
+                        dismiss()
+                    }
+                    .disabled(editableWaypoints.count < 2)
+                }
+            }
+            .padding()
+        }
+        .frame(minWidth: 760, minHeight: 560)
+    }
+
+    private var selectionText: String {
+        if usesPointPicker {
+            guard let selectedCoordinate else {
+                return "Linksklick auf die Karte, um eine Koordinate zu setzen."
+            }
+            return String(
+                format: "Selected: %.6f, %.6f",
+                locale: Locale(identifier: "en_US_POSIX"),
+                selectedCoordinate.latitude,
+                selectedCoordinate.longitude
+            )
+        }
+
+        if let movingWaypointID,
+           let index = editableWaypoints.firstIndex(where: { $0.id == movingWaypointID }) {
+            return "Move mode: waypoint \(index + 1). Linksklick auf die Karte, um ihn zu verschieben."
+        }
+
+        if !isAddModeEnabled {
+            return "Kein Modus aktiv. Add Mode einschalten oder einen Waypoint zum Verschieben auswaehlen."
+        }
+
+        return "Add mode: Linksklick auf die Karte, um einen neuen Waypoint anzufuegen."
+    }
+
+    private var displayedWaypoints: [GeoPoint] {
+        usesWaypointEditor ? editableWaypoints : existingWaypoints
+    }
+
+    private var displayedWaypointsCoordinates: [CLLocationCoordinate2D] {
+        displayedWaypoints.map { waypoint in
+            CLLocationCoordinate2D(latitude: waypoint.lat, longitude: waypoint.lon)
+        }
+    }
+
+    private var usesPointPicker: Bool {
+        switch mode {
+        case .addLocation, .editLocation:
+            return true
+        case .editWaypoints:
+            return false
+        }
+    }
+
+    private var usesWaypointEditor: Bool {
+        !usesPointPicker
+    }
+
+    private var mapZoomControls: some View {
+        VStack(spacing: 8) {
+            Button {
+                zoomMap(by: 0.5)
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderedProminent)
+            .help("Zoom in")
+
+            Button {
+                zoomMap(by: 2.0)
+            } label: {
+                Image(systemName: "minus")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.bordered)
+            .help("Zoom out")
+        }
+        .padding(10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .padding(12)
+    }
+
+    @ViewBuilder
+    private var waypointEditorControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Waypoints")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Spacer()
+                if isAddModeEnabled {
+                    Button("Add Mode") {
+                        isAddModeEnabled = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                } else {
+                    Button("Add Mode") {
+                        isAddModeEnabled = true
+                        movingWaypointID = nil
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(Array(editableWaypoints.enumerated()), id: \.element.id) { index, waypoint in
+                        HStack {
+                            Text("#\(index + 1)")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .frame(width: 28, alignment: .leading)
+
+                            Text(
+                                String(
+                                    format: "%.6f, %.6f",
+                                    locale: Locale(identifier: "en_US_POSIX"),
+                                    waypoint.lat,
+                                    waypoint.lon
+                                )
+                            )
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.secondary)
+
+                            Spacer()
+
+                            Button(movingWaypointID == waypoint.id ? "Moving..." : "Move") {
+                                movingWaypointID = waypoint.id
+                                isAddModeEnabled = false
+                            }
+                            .disabled(movingWaypointID == waypoint.id)
+
+                            Button(role: .destructive) {
+                                editableWaypoints.removeAll { $0.id == waypoint.id }
+                                if movingWaypointID == waypoint.id {
+                                    movingWaypointID = nil
+                                }
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .frame(height: waypointListHeight)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+            )
+        }
+    }
+
+    private func handleMapTap(_ coordinate: CLLocationCoordinate2D) {
+        if usesPointPicker {
+            selectedCoordinate = coordinate
+            return
+        }
+
+        if let movingWaypointID,
+           let index = editableWaypoints.firstIndex(where: { $0.id == movingWaypointID }) {
+            editableWaypoints[index].lat = coordinate.latitude
+            editableWaypoints[index].lon = coordinate.longitude
+            return
+        }
+
+        guard isAddModeEnabled else { return }
+        editableWaypoints.append(GeoPoint(lat: coordinate.latitude, lon: coordinate.longitude))
+    }
+
+    private func moveWaypoint(withID id: UUID, to coordinate: CLLocationCoordinate2D) {
+        guard let index = editableWaypoints.firstIndex(where: { $0.id == id }) else { return }
+        editableWaypoints[index].lat = coordinate.latitude
+        editableWaypoints[index].lon = coordinate.longitude
+    }
+
+    private func zoomMap(by factor: Double) {
+        let minDelta = 0.0005
+        let maxDelta = 120.0
+
+        var region = visibleRegion
+        region.span.latitudeDelta = min(max(region.span.latitudeDelta * factor, minDelta), maxDelta)
+        region.span.longitudeDelta = min(max(region.span.longitudeDelta * factor, minDelta), maxDelta)
+        visibleRegion = region
+        cameraPosition = .region(region)
+    }
+
+    private func runLocationSearch() {
+        let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        isSearching = true
+        searchStatusMessage = nil
+
+        Task {
+            await performLocationSearch(query: trimmed)
+        }
+    }
+
+    @MainActor
+    private func performLocationSearch(query: String) async {
+        var request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = query
+        request.region = visibleRegion
+        request.resultTypes = [.address, .pointOfInterest]
+
+        do {
+            let response = try await MKLocalSearch(request: request).start()
+            guard let first = response.mapItems.first,
+                  let coordinate = first.placemark.location?.coordinate else {
+                searchStatusMessage = "Kein Treffer fuer \"\(query)\" gefunden."
+                isSearching = false
+                return
+            }
+
+            centerMap(on: coordinate)
+            searchStatusMessage = first.name ?? first.placemark.title ?? "Treffer gefunden"
+        } catch {
+            searchStatusMessage = "Suche fehlgeschlagen: \(error.localizedDescription)"
+        }
+
+        isSearching = false
+    }
+
+    private func centerMap(on coordinate: CLLocationCoordinate2D) {
+        let latDelta = min(max(visibleRegion.span.latitudeDelta, 0.005), 0.2)
+        let lonDelta = min(max(visibleRegion.span.longitudeDelta, 0.005), 0.2)
+        let region = MKCoordinateRegion(
+            center: coordinate,
+            span: MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: lonDelta)
+        )
+        visibleRegion = region
+        cameraPosition = .region(region)
+    }
+
+    private var waypointListHeight: CGFloat {
+        let rowHeight: CGFloat = 32
+        let rowCount = max(1, min(editableWaypoints.count, 5))
+        return (CGFloat(rowCount) * rowHeight) + 10
+    }
+
+    @ViewBuilder
+    private func waypointBadge(index: Int, isSelected: Bool) -> some View {
+        Text("\(index)")
+            .font(.caption2)
+            .fontWeight(.bold)
+            .foregroundColor(.white)
+            .frame(width: 22, height: 22)
+            .background(isSelected ? Color.orange : Color.blue)
+            .clipShape(Circle())
+            .overlay(
+                Circle()
+                    .stroke(Color.white.opacity(0.9), lineWidth: 1)
+            )
     }
 }
