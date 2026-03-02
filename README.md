@@ -12,6 +12,12 @@ A macOS SwiftUI application that provides a graphical user interface for managin
   - Delete simulators
   - Delete all unavailable simulators in one action (`simctl delete unavailable`)
   - Boot and shutdown simulators
+- **Location Player (Booted Devices)**:
+  - Open via context menu from a booted simulator row
+  - Manage reusable location and route presets
+  - Apply single locations (`simctl location set`)
+  - Play/pause/resume/stop waypoint routes with speed and interval/distance updates (`simctl location start`)
+  - Route playback is isolated per simulator UDID
 - **Device Information**: View detailed information including:
   - Device name and UDID
   - Current state (Booted/Shutdown)
@@ -52,6 +58,11 @@ A macOS SwiftUI application that provides a graphical user interface for managin
    - **Clone Device**: Create a copy of the selected device with a new name
    - **Boot/Shutdown**: Start or stop the selected simulator
    - **Delete Device**: Remove the simulator (with confirmation)
+5. For booted devices, right-click the device in the table and choose **Open Location Player**.
+6. In the Location Player window you can:
+   - Select or edit saved locations and routes
+   - Configure route speed and update mode (`interval` or `distance`)
+   - Control playback using **Play**, **Pause/Resume**, and **Stop**
 5. If unavailable simulators exist, use **Delete Unavailable** in the top toolbar to remove all unavailable entries at once (with confirmation).
 
 ### Refreshing the Device List

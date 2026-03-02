@@ -180,6 +180,14 @@ class DeviceListViewModel: ObservableObject {
         }
         return device.deviceTypeName
     }
+
+    func device(by udid: String) -> SimDevice? {
+        devices.first { $0.udid == udid }
+    }
+
+    func deviceName(by udid: String) -> String {
+        device(by: udid)?.name ?? udid
+    }
     
     // MARK: - Actions
     

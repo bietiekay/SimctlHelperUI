@@ -6,8 +6,19 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		8C11AA072F50000100803974 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8B45FFAA2F3A169200803974 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8B45FFB12F3A169200803974;
+			remoteInfo = SimctlHelperUI;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		8B45FFB22F3A169200803974 /* SimctlHelperUI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SimctlHelperUI.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8C11AA012F50000100803974 /* SimctlHelperUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SimctlHelperUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +27,22 @@
 			path = SimctlHelperUI;
 			sourceTree = "<group>";
 		};
+		8C11AA022F50000100803974 /* SimctlHelperUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SimctlHelperUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		8B45FFAF2F3A169200803974 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8C11AA032F50000100803974 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +56,7 @@
 			isa = PBXGroup;
 			children = (
 				8B45FFB42F3A169200803974 /* SimctlHelperUI */,
+				8C11AA022F50000100803974 /* SimctlHelperUITests */,
 				8B45FFB32F3A169200803974 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +65,7 @@
 			isa = PBXGroup;
 			children = (
 				8B45FFB22F3A169200803974 /* SimctlHelperUI.app */,
+				8C11AA012F50000100803974 /* SimctlHelperUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -70,6 +95,29 @@
 			productReference = 8B45FFB22F3A169200803974 /* SimctlHelperUI.app */;
 			productType = "com.apple.product-type.application";
 		};
+		8C11AA062F50000100803974 /* SimctlHelperUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8C11AA0B2F50000100803974 /* Build configuration list for PBXNativeTarget "SimctlHelperUITests" */;
+			buildPhases = (
+				8C11AA052F50000100803974 /* Sources */,
+				8C11AA032F50000100803974 /* Frameworks */,
+				8C11AA042F50000100803974 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				8C11AA082F50000100803974 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				8C11AA022F50000100803974 /* SimctlHelperUITests */,
+			);
+			name = SimctlHelperUITests;
+			packageProductDependencies = (
+			);
+			productName = SimctlHelperUITests;
+			productReference = 8C11AA012F50000100803974 /* SimctlHelperUITests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -82,6 +130,10 @@
 				TargetAttributes = {
 					8B45FFB12F3A169200803974 = {
 						CreatedOnToolsVersion = 26.2;
+					};
+					8C11AA062F50000100803974 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 8B45FFB12F3A169200803974;
 					};
 				};
 			};
@@ -100,12 +152,20 @@
 			projectRoot = "";
 			targets = (
 				8B45FFB12F3A169200803974 /* SimctlHelperUI */,
+				8C11AA062F50000100803974 /* SimctlHelperUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		8B45FFB02F3A169200803974 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8C11AA042F50000100803974 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -122,7 +182,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		8C11AA052F50000100803974 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		8C11AA082F50000100803974 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 8B45FFB12F3A169200803974 /* SimctlHelperUI */;
+			targetProxy = 8C11AA072F50000100803974 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		8B45FFBB2F3A169400803974 /* Debug */ = {
@@ -313,6 +388,60 @@
 			};
 			name = Release;
 		};
+		8C11AA092F50000100803974 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = X7H5D9Q5T4;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				PRODUCT_BUNDLE_IDENTIFIER = de.kirstenpfad.SimctlHelperUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SimctlHelperUI.app/Contents/MacOS/SimctlHelperUI";
+			};
+			name = Debug;
+		};
+		8C11AA0A2F50000100803974 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = X7H5D9Q5T4;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				PRODUCT_BUNDLE_IDENTIFIER = de.kirstenpfad.SimctlHelperUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SimctlHelperUI.app/Contents/MacOS/SimctlHelperUI";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -330,6 +459,15 @@
 			buildConfigurations = (
 				8B45FFBE2F3A169400803974 /* Debug */,
 				8B45FFBF2F3A169400803974 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		8C11AA0B2F50000100803974 /* Build configuration list for PBXNativeTarget "SimctlHelperUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8C11AA092F50000100803974 /* Debug */,
+				8C11AA0A2F50000100803974 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

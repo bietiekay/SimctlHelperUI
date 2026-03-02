@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.openWindow) private var openWindow
     @StateObject private var viewModel = DeviceListViewModel()
     @State private var showDeleteUnavailableConfirmation = false
     @State private var isDeletingUnavailable = false
@@ -110,6 +111,18 @@ struct ContentView: View {
         return Table(viewModel.devices, selection: selectionBinding) {
             TableColumn("Name") { device in
                 DeviceNameCell(device: device)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        guard device.isBooted else { return }
+                        openWindow(id: "location-player", value: device.udid)
+                    }
+                    .contextMenu {
+                        if device.isBooted {
+                            Button("Open Location Player") {
+                                openWindow(id: "location-player", value: device.udid)
+                            }
+                        }
+                    }
             }
             .width(min: 200, ideal: 250)
             TableColumn("State") { device in
