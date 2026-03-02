@@ -3,7 +3,7 @@
 A macOS SwiftUI application that provides a graphical interface for `xcrun simctl`.
 It helps manage iOS simulators and includes a dedicated Location Player for route and location simulation on booted devices.
 
-![SimctlHelperUI Screenshot](screenshot/screenshot.png)
+![SimctlHelperUI Screenshot](screenshot/screenshot12.png)
 
 ## Feature Overview
 
