@@ -101,6 +101,7 @@ private final class RouteSessionStore: @unchecked Sendable {
     private let lock = NSLock()
     nonisolated(unsafe) private var sessions: [String: RouteSession] = [:]
     nonisolated(unsafe) private var states: [String: PlaybackState] = [:]
+    nonisolated(unsafe) private var activeRouteIDs: [String: UUID] = [:]
     nonisolated(unsafe) private var stoppingUDIDs: Set<String> = []
 
     nonisolated func setSession(_ session: RouteSession, for udid: String) {
@@ -143,6 +144,14 @@ private final class RouteSessionStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         states[udid] = state
+        switch state {
+        case .running(let routeID), .paused(let routeID):
+            activeRouteIDs[udid] = routeID
+        case .idle:
+            activeRouteIDs.removeValue(forKey: udid)
+        case .finished, .failed:
+            break
+        }
     }
 
     nonisolated func playbackState(for udid: String) -> PlaybackState {
@@ -154,16 +163,17 @@ private final class RouteSessionStore: @unchecked Sendable {
     nonisolated func routeID(for udid: String) -> UUID? {
         lock.lock()
         defer { lock.unlock() }
-        guard let session = sessions[udid] else {
-            return nil
+        if let session = sessions[udid] {
+            return session.routeID
         }
-        return session.routeID
+        return activeRouteIDs[udid]
     }
 
     nonisolated func clearState(for udid: String) {
         lock.lock()
         defer { lock.unlock() }
         states.removeValue(forKey: udid)
+        activeRouteIDs.removeValue(forKey: udid)
         stoppingUDIDs.remove(udid)
         sessions.removeValue(forKey: udid)
     }
@@ -446,6 +456,33 @@ class SimctlService: SimctlLocationControlling {
         }
     }
 
+    nonisolated private func signalExternalLocationStartProcesses(
+        for udid: String,
+        signal: Int32,
+        signalName: String
+    ) -> Bool {
+        let pids = runningExternalLocationStartPIDs(for: udid)
+        guard !pids.isEmpty else {
+            logDebug("No external route-start processes to signal (\(signalName)) for udid=\(udid)")
+            return false
+        }
+
+        var successfulSignals = 0
+        for pid in pids {
+            if kill(pid, signal) == 0 {
+                successfulSignals += 1
+            } else {
+                logDebug("Failed to send \(signalName) to pid=\(pid) for udid=\(udid)")
+            }
+        }
+
+        if successfulSignals > 0 {
+            logDebug("Sent \(signalName) to \(successfulSignals)/\(pids.count) external route-start process(es) for udid=\(udid)")
+            return true
+        }
+        return false
+    }
+
     private func terminateExternalLocationStartProcessesAsync(for udid: String) async {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async { [self] in
@@ -726,6 +763,16 @@ class SimctlService: SimctlLocationControlling {
 
         let nextIndex = segmentIndex + 1
         if nextIndex >= segments.count {
+            if !runningExternalLocationStartPIDs(for: udid).isEmpty {
+                routeSessions.setPlaybackState(.running(routeID: route.id), for: udid)
+                logDebug(
+                    """
+                    Route process exited but external route-start process is still active; \
+                    keeping playback running for udid=\(udid), routeID=\(route.id.uuidString)
+                    """
+                )
+                return
+            }
             routeSessions.setPlaybackState(.finished, for: udid)
             logDebug("Route completed for udid=\(udid), routeID=\(route.id.uuidString)")
             return
@@ -745,47 +792,57 @@ class SimctlService: SimctlLocationControlling {
     }
 
     func pauseRoute(udid: String) throws {
-        guard let session = routeSessions.session(for: udid) else {
-            logDebug("pauseRoute ignored: no active session for udid=\(udid)")
+        if let session = routeSessions.session(for: udid), session.process.isRunning {
+            let result = kill(session.process.processIdentifier, SIGSTOP)
+            guard result == 0 else {
+                logDebug("pauseRoute failed for udid=\(udid), pid=\(session.process.processIdentifier)")
+                throw SimctlError.commandFailed("Failed to pause route session.")
+            }
+
+            routeSessions.setPlaybackState(.paused(routeID: session.routeID), for: udid)
+            logDebug("pauseRoute success for udid=\(udid), pid=\(session.process.processIdentifier), routeID=\(session.routeID.uuidString)")
             return
         }
 
-        guard session.process.isRunning else {
+        guard signalExternalLocationStartProcesses(for: udid, signal: SIGSTOP, signalName: "SIGSTOP") else {
             routeSessions.setPlaybackState(.finished, for: udid)
-            logDebug("pauseRoute found non-running session for udid=\(udid), marking finished")
+            logDebug("pauseRoute ignored: no active route process for udid=\(udid), marking finished")
             return
         }
 
-        let result = kill(session.process.processIdentifier, SIGSTOP)
-        guard result == 0 else {
-            logDebug("pauseRoute failed for udid=\(udid), pid=\(session.process.processIdentifier)")
-            throw SimctlError.commandFailed("Failed to pause route session.")
+        if let routeID = routeSessions.routeID(for: udid) {
+            routeSessions.setPlaybackState(.paused(routeID: routeID), for: udid)
+            logDebug("pauseRoute success via external process signal for udid=\(udid), routeID=\(routeID.uuidString)")
+        } else {
+            logDebug("pauseRoute signaled external process for udid=\(udid), but routeID was unknown")
         }
-
-        routeSessions.setPlaybackState(.paused(routeID: session.routeID), for: udid)
-        logDebug("pauseRoute success for udid=\(udid), pid=\(session.process.processIdentifier), routeID=\(session.routeID.uuidString)")
     }
 
     func resumeRoute(udid: String) throws {
-        guard let session = routeSessions.session(for: udid) else {
-            logDebug("resumeRoute ignored: no active session for udid=\(udid)")
+        if let session = routeSessions.session(for: udid), session.process.isRunning {
+            let result = kill(session.process.processIdentifier, SIGCONT)
+            guard result == 0 else {
+                logDebug("resumeRoute failed for udid=\(udid), pid=\(session.process.processIdentifier)")
+                throw SimctlError.commandFailed("Failed to resume route session.")
+            }
+
+            routeSessions.setPlaybackState(.running(routeID: session.routeID), for: udid)
+            logDebug("resumeRoute success for udid=\(udid), pid=\(session.process.processIdentifier), routeID=\(session.routeID.uuidString)")
             return
         }
 
-        guard session.process.isRunning else {
+        guard signalExternalLocationStartProcesses(for: udid, signal: SIGCONT, signalName: "SIGCONT") else {
             routeSessions.setPlaybackState(.finished, for: udid)
-            logDebug("resumeRoute found non-running session for udid=\(udid), marking finished")
+            logDebug("resumeRoute ignored: no active route process for udid=\(udid), marking finished")
             return
         }
 
-        let result = kill(session.process.processIdentifier, SIGCONT)
-        guard result == 0 else {
-            logDebug("resumeRoute failed for udid=\(udid), pid=\(session.process.processIdentifier)")
-            throw SimctlError.commandFailed("Failed to resume route session.")
+        if let routeID = routeSessions.routeID(for: udid) {
+            routeSessions.setPlaybackState(.running(routeID: routeID), for: udid)
+            logDebug("resumeRoute success via external process signal for udid=\(udid), routeID=\(routeID.uuidString)")
+        } else {
+            logDebug("resumeRoute signaled external process for udid=\(udid), but routeID was unknown")
         }
-
-        routeSessions.setPlaybackState(.running(routeID: session.routeID), for: udid)
-        logDebug("resumeRoute success for udid=\(udid), pid=\(session.process.processIdentifier), routeID=\(session.routeID.uuidString)")
     }
 
     func stopRoute(udid: String) async {

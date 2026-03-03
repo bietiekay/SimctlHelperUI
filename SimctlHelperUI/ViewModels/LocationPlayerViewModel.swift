@@ -19,7 +19,6 @@ final class LocationPlayerViewModel: ObservableObject {
 
     private let service: SimctlLocationControlling
     private let libraryStore: LocationLibraryStore
-    private var pollTask: Task<Void, Never>?
     private var loaded = false
     private var debugLogObserver: NSObjectProtocol?
 
@@ -75,7 +74,6 @@ final class LocationPlayerViewModel: ObservableObject {
     }
 
     deinit {
-        pollTask?.cancel()
         if let debugLogObserver {
             NotificationCenter.default.removeObserver(debugLogObserver)
         }
@@ -124,17 +122,11 @@ final class LocationPlayerViewModel: ObservableObject {
     func start() {
         guard !loaded else { return }
         loaded = true
-        logDebug("start() called, beginning status polling for udid=\(udid)")
+        logDebug("start() called, running one-time status refresh for udid=\(udid)")
 
-        pollTask?.cancel()
-        pollTask = Task { [weak self] in
+        Task { [weak self] in
             guard let self else { return }
             await self.refreshDeviceStatus()
-
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                await self.refreshDeviceStatus()
-            }
         }
     }
 

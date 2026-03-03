@@ -43,7 +43,6 @@ enum LocationPlayerWindowCoordinator {
 
     static func assignIdentifier(to window: NSWindow, udid: String?) {
         window.identifier = windowIdentifier(for: udid)
-        restoreMainWindowFocusIfAvailable(excluding: window)
     }
 
     static func reassignIdentifier(from oldUDID: String?, to newUDID: String?) {
@@ -58,18 +57,6 @@ enum LocationPlayerWindowCoordinator {
         guard let window, window.isVisible else { return }
         DispatchQueue.main.async {
             window.makeKeyAndOrderFront(nil)
-        }
-    }
-
-    private static func restoreMainWindowFocusIfAvailable(excluding locationPlayerWindow: NSWindow) {
-        DispatchQueue.main.async {
-            guard let mainWindow = NSApp.windows.first(where: { $0.identifier == mainWindowIdentifier }) else {
-                return
-            }
-            guard mainWindow != locationPlayerWindow, mainWindow.isVisible else {
-                return
-            }
-            mainWindow.makeKeyAndOrderFront(nil)
         }
     }
 

@@ -11,7 +11,7 @@ import AppKit
 @main
 struct SimctlHelperUIApp: App {
     var body: some Scene {
-        WindowGroup {
+        Window("Device Overview", id: "main") {
             ContentView()
                 .background(
                     WindowObserverView { window in
@@ -19,6 +19,7 @@ struct SimctlHelperUIApp: App {
                     }
                 )
         }
+        .defaultSize(width: 1100, height: 700)
 
         WindowGroup("Location Player", id: "location-player", for: String.self) { udid in
             LocationPlayerSceneView(initialUDID: udid.wrappedValue)

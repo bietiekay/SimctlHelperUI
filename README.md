@@ -31,6 +31,14 @@ It helps manage iOS simulators and includes a dedicated Location Player for rout
 
 The Location Player opens in its own window and is bound to a single simulator UDID.
 
+### Window & Refresh Behavior
+
+- The app opens a dedicated main window (`Device Overview`) on launch.
+- The `Device Overview` window is no longer forced to the foreground when assigning/opening Location Player windows.
+- Location Player performs a one-time device status refresh on open.
+- Continuous background polling (every few seconds) is currently disabled.
+- Use `Refresh` in the main `Device Overview` toolbar when you want to refresh the simulator list.
+
 ### Location Features
 
 - Apply a static location with `simctl location <udid> set <lat>,<lon>`
@@ -45,7 +53,7 @@ The Location Player opens in its own window and is bound to a single simulator U
   - Update mode interval (`--interval`) or distance (`--distance`)
 - Playback controls:
   - `Play` starts route simulation
-  - `Pause/Resume` uses process signals (`SIGSTOP` / `SIGCONT`)
+  - `Pause/Resume` uses process signals (`SIGSTOP` / `SIGCONT`), including fallback signaling for external `simctl location ... start` processes on long routes
   - `Stop` terminates route process and clears simulated location
 
 ### Map Editing
@@ -134,6 +142,10 @@ The app follows MVVM.
 - Added GPX route import.
 - Added library JSON export/import with selective import dialog.
 - Added ignore rules for Xcode user data (`**/xcuserdata/`, `*.xcuserstate`).
+- Fixed long-route playback control so `Pause/Resume` remains usable when `simctl` hands route execution to external processes.
+- Changed app startup/main-scene handling to open `Device Overview` as the primary window.
+- Removed automatic main-window foreground stealing when Location Player windows are created/updated.
+- Disabled periodic device polling in Location Player (one-time refresh on open; manual refresh via main window).
 
 ## License
 
