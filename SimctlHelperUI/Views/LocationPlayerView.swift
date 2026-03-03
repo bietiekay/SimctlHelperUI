@@ -1670,6 +1670,10 @@ private struct CoordinatePickerSheet: View {
     @State private var searchQuery: String
     @State private var searchStatusMessage: String?
     @State private var isSearching: Bool
+    private let minVisibleWaypointBadges = 100
+    private let maxDraggableWaypointBadges = 140
+    private let detailZoomThresholdDelta = 0.008
+    private let fullDetailZoomDelta = 0.0009
 
     init(
         title: String,
@@ -1746,15 +1750,17 @@ private struct CoordinatePickerSheet: View {
                                     .stroke(.blue, lineWidth: 2)
                             }
 
-                            ForEach(Array(displayedWaypoints.enumerated()), id: \.element.id) { index, waypoint in
+                            ForEach(waypointBadgeItems) { item in
+                                let waypoint = item.waypoint
                                 Annotation("", coordinate: CLLocationCoordinate2D(latitude: waypoint.lat, longitude: waypoint.lon)) {
-                                    waypointBadge(index: index + 1, isSelected: waypoint.id == movingWaypointID)
+                                    let badge = waypointBadge(index: item.index + 1, isSelected: waypoint.id == movingWaypointID)
                                         .onTapGesture {
                                             guard usesWaypointEditor else { return }
                                             movingWaypointID = waypoint.id
                                             isAddModeEnabled = false
                                         }
-                                        .highPriorityGesture(
+                                    if canDragWaypointBadges {
+                                        badge.highPriorityGesture(
                                             DragGesture(minimumDistance: 0, coordinateSpace: .global)
                                                 .onChanged { value in
                                                     guard usesWaypointEditor else { return }
@@ -1764,6 +1770,9 @@ private struct CoordinatePickerSheet: View {
                                                     moveWaypoint(withID: waypoint.id, to: coordinate)
                                                 }
                                         )
+                                    } else {
+                                        badge
+                                    }
                                 }
                             }
 
@@ -1773,7 +1782,7 @@ private struct CoordinatePickerSheet: View {
                             }
                         }
                         .mapStyle(.hybrid(elevation: .realistic))
-                        .onMapCameraChange(frequency: .continuous) { context in
+                        .onMapCameraChange(frequency: .onEnd) { context in
                             visibleRegion = context.region
                         }
                         .simultaneousGesture(
@@ -1803,6 +1812,12 @@ private struct CoordinatePickerSheet: View {
                     Text(selectionText)
                         .font(.caption)
                         .foregroundColor(.secondary)
+
+                    if let waypointSamplingStatusText {
+                        Text(waypointSamplingStatusText)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
@@ -1868,6 +1883,93 @@ private struct CoordinatePickerSheet: View {
         displayedWaypoints.map { waypoint in
             CLLocationCoordinate2D(latitude: waypoint.lat, longitude: waypoint.lon)
         }
+    }
+
+    private var canDragWaypointBadges: Bool {
+        usesWaypointEditor && waypointBadgeItems.count <= maxDraggableWaypointBadges
+    }
+
+    private var visibleWaypointBadgeLimit: Int {
+        let total = displayedWaypoints.count
+        guard usesWaypointEditor else { return total }
+        guard total > minVisibleWaypointBadges else { return total }
+
+        let currentDelta = max(visibleRegion.span.latitudeDelta, visibleRegion.span.longitudeDelta)
+
+        // Keep rendering aggressively capped for performance until the user is very close.
+        if currentDelta >= detailZoomThresholdDelta {
+            return minVisibleWaypointBadges
+        }
+
+        if currentDelta <= fullDetailZoomDelta {
+            return total
+        }
+
+        let zoomProgress = (detailZoomThresholdDelta - currentDelta) / (detailZoomThresholdDelta - fullDetailZoomDelta)
+        let clampedProgress = min(max(zoomProgress, 0), 1)
+        let easedProgress = pow(clampedProgress, 2.6)
+        let scaledLimit = Double(minVisibleWaypointBadges)
+            + easedProgress * Double(total - minVisibleWaypointBadges)
+
+        return min(total, max(minVisibleWaypointBadges, Int(round(scaledLimit))))
+    }
+
+    private var waypointBadgeItems: [WaypointBadgeItem] {
+        let source = displayedWaypoints.enumerated().map { offset, waypoint in
+            WaypointBadgeItem(index: offset, waypoint: waypoint)
+        }
+
+        let badgeLimit = visibleWaypointBadgeLimit
+        guard usesWaypointEditor, source.count > badgeLimit else {
+            return source
+        }
+
+        var fixedWaypointIDs = Set<UUID>()
+        if let firstID = source.first?.waypoint.id {
+            fixedWaypointIDs.insert(firstID)
+        }
+        if let lastID = source.last?.waypoint.id {
+            fixedWaypointIDs.insert(lastID)
+        }
+        if let movingWaypointID {
+            fixedWaypointIDs.insert(movingWaypointID)
+        }
+
+        var selectedItems: [WaypointBadgeItem] = []
+        var selectedWaypointIDs = Set<UUID>()
+
+        for item in source where fixedWaypointIDs.contains(item.waypoint.id) {
+            if selectedWaypointIDs.insert(item.waypoint.id).inserted {
+                selectedItems.append(item)
+            }
+        }
+
+        let samplingBudget = max(badgeLimit - selectedItems.count, 0)
+        guard samplingBudget > 0 else {
+            return selectedItems.sorted { $0.index < $1.index }
+        }
+
+        let samplingStride = max(1, Int(ceil(Double(source.count) / Double(samplingBudget))))
+        for sourceIndex in stride(from: 0, to: source.count, by: samplingStride) {
+            let item = source[sourceIndex]
+            if selectedWaypointIDs.insert(item.waypoint.id).inserted {
+                selectedItems.append(item)
+            }
+            if selectedItems.count >= badgeLimit {
+                break
+            }
+        }
+
+        return selectedItems.sorted { $0.index < $1.index }
+    }
+
+    private var waypointSamplingStatusText: String? {
+        let total = displayedWaypoints.count
+        let limit = visibleWaypointBadgeLimit
+        guard usesWaypointEditor, total > limit else {
+            return nil
+        }
+        return "Performance mode: showing \(waypointBadgeItems.count) of \(total) markers (zoom limit \(limit))."
     }
 
     private var usesPointPicker: Bool {
@@ -2083,5 +2185,12 @@ private struct CoordinatePickerSheet: View {
                 Circle()
                     .stroke(Color.white.opacity(0.9), lineWidth: 1)
             )
+    }
+
+    private struct WaypointBadgeItem: Identifiable {
+        let index: Int
+        let waypoint: GeoPoint
+
+        var id: UUID { waypoint.id }
     }
 }
