@@ -443,6 +443,18 @@ final class LocationPlayerViewModel: ObservableObject {
         saveLibrary()
     }
 
+    func renameLocation(id: UUID, to newName: String) {
+        guard var location = locations.first(where: { $0.id == id }) else { return }
+        location.name = newName
+        replaceLocation(location)
+    }
+
+    func renameRoute(id: UUID, to newName: String) {
+        guard var route = routes.first(where: { $0.id == id }) else { return }
+        route.name = newName
+        replaceRoute(route)
+    }
+
     func applySelectedLocation() {
         guard hasTargetDevice else {
             errorMessage = "Select a target simulator first."

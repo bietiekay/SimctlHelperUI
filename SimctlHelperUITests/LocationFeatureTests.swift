@@ -333,4 +333,132 @@ final class LocationFeatureTests: XCTestCase {
         XCTAssertEqual(route.waypoints[0].lat, 48.200000, accuracy: 0.000001)
         XCTAssertEqual(route.waypoints[1].lat, 48.300000, accuracy: 0.000001)
     }
+
+    func testRenameLocationUpdatesNameAndPersists() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("simctlhelperui-tests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let store = LocationLibraryStore(baseDirectoryURL: tempRoot)
+        let location = SavedLocation(
+            id: UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+            name: "Old Name",
+            point: GeoPoint(lat: 48.137154, lon: 11.576124)
+        )
+        let route = SavedRoute(
+            id: UUID(uuidString: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")!,
+            name: "Route",
+            waypoints: [
+                GeoPoint(lat: 48.137154, lon: 11.576124),
+                GeoPoint(lat: 52.520008, lon: 13.404954)
+            ],
+            speedMetersPerSecond: 25,
+            updateMode: .interval(seconds: 1)
+        )
+
+        try store.save(LocationLibrary(locations: [location], routes: [route], defaultLocationID: location.id))
+
+        let viewModel = LocationPlayerViewModel(
+            service: UnusedSimctlService(),
+            libraryStore: store
+        )
+
+        viewModel.renameLocation(id: location.id, to: "  Home  ")
+        XCTAssertEqual(viewModel.locations.first(where: { $0.id == location.id })?.name, "Home")
+
+        viewModel.renameLocation(id: location.id, to: "   ")
+        XCTAssertEqual(viewModel.locations.first(where: { $0.id == location.id })?.name, "Untitled Location")
+
+        let persisted = try store.load()
+        XCTAssertEqual(persisted.locations.first(where: { $0.id == location.id })?.name, "Untitled Location")
+    }
+
+    func testRenameRouteUpdatesNameAndPersists() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("simctlhelperui-tests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let store = LocationLibraryStore(baseDirectoryURL: tempRoot)
+        let location = SavedLocation(
+            id: UUID(uuidString: "cccccccc-cccc-cccc-cccc-cccccccccccc")!,
+            name: "Loc",
+            point: GeoPoint(lat: 48.137154, lon: 11.576124)
+        )
+        let route = SavedRoute(
+            id: UUID(uuidString: "dddddddd-dddd-dddd-dddd-dddddddddddd")!,
+            name: "Old Route",
+            waypoints: [
+                GeoPoint(lat: 48.137154, lon: 11.576124),
+                GeoPoint(lat: 52.520008, lon: 13.404954)
+            ],
+            speedMetersPerSecond: 25,
+            updateMode: .interval(seconds: 1)
+        )
+
+        try store.save(LocationLibrary(locations: [location], routes: [route], defaultLocationID: location.id))
+
+        let viewModel = LocationPlayerViewModel(
+            service: UnusedSimctlService(),
+            libraryStore: store
+        )
+
+        viewModel.renameRoute(id: route.id, to: "  Morning Ride  ")
+        XCTAssertEqual(viewModel.routes.first(where: { $0.id == route.id })?.name, "Morning Ride")
+
+        viewModel.renameRoute(id: route.id, to: " ")
+        XCTAssertEqual(viewModel.routes.first(where: { $0.id == route.id })?.name, "Untitled Route")
+
+        let persisted = try store.load()
+        XCTAssertEqual(persisted.routes.first(where: { $0.id == route.id })?.name, "Untitled Route")
+    }
+}
+
+private final class UnusedSimctlService: SimctlLocationControlling {
+    func fetchDeviceList() async throws -> SimctlListResponse {
+        fatalError("Unused in these tests")
+    }
+
+    func bootDevice(udid _: String) async throws {
+        fatalError("Unused in these tests")
+    }
+
+    func setLocation(udid _: String, point _: GeoPoint) async throws {
+        fatalError("Unused in these tests")
+    }
+
+    func clearLocation(udid _: String) async throws {
+        fatalError("Unused in these tests")
+    }
+
+    func startRoute(udid _: String, route _: SavedRoute) async throws {
+        fatalError("Unused in these tests")
+    }
+
+    func pauseRoute(udid _: String) throws {
+        fatalError("Unused in these tests")
+    }
+
+    func resumeRoute(udid _: String) throws {
+        fatalError("Unused in these tests")
+    }
+
+    func stopRoute(udid _: String) async {
+        fatalError("Unused in these tests")
+    }
+
+    func playbackState(udid _: String) -> PlaybackState {
+        .idle
+    }
+
+    func deviceBootState(udid _: String) async throws -> DeviceState {
+        fatalError("Unused in these tests")
+    }
+
+    func deviceName(udid _: String) async throws -> String {
+        fatalError("Unused in these tests")
+    }
 }

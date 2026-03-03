@@ -23,6 +23,7 @@ It helps manage iOS simulators and includes a dedicated Location Player for rout
   - Isolated sessions per simulator UDID
 - Location and route library management:
   - Saved locations and saved routes
+  - Direct rename actions for locations and routes
   - GPX route import
   - Library export/import as JSON
   - Selective import (choose which locations/routes to import)
@@ -42,12 +43,14 @@ The Location Player opens in its own window and is bound to a single simulator U
 ### Location Features
 
 - Apply a static location with `simctl location <udid> set <lat>,<lon>`
+- Rename saved locations
 - Edit coordinates manually
 - Edit location on map
 
 ### Route Features
 
 - Waypoint-based routes using `simctl location <udid> start ...`
+- Rename saved routes
 - Route parameters:
   - Speed (`--speed`)
   - Update mode interval (`--interval`) or distance (`--distance`)
@@ -108,6 +111,7 @@ The Location Player opens in its own window and is bound to a single simulator U
    - action panel button.
 5. In Location Player:
    - manage locations/routes,
+   - rename selected locations/routes using `Rename`,
    - import GPX routes,
    - play/pause/resume/stop route playback,
    - export/import full library JSON.
@@ -140,6 +144,7 @@ The app follows MVVM.
 - Added fixed bottom action bar in map editor to keep save/cancel visible.
 - Added Add Mode toggle behavior with active highlighting.
 - Added GPX route import.
+- Added direct rename actions for selected locations and routes in the Location Player library panel.
 - Added library JSON export/import with selective import dialog.
 - Added ignore rules for Xcode user data (`**/xcuserdata/`, `*.xcuserstate`).
 - Fixed long-route playback control so `Pause/Resume` remains usable when `simctl` hands route execution to external processes.

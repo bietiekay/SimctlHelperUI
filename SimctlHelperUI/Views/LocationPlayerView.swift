@@ -29,6 +29,7 @@ struct LocationPlayerView: View {
     @State private var gpxImportContext: GPXImportContext?
     @State private var libraryExportDocument = LocationLibraryDocument(data: Data())
     @State private var importSelectionContext: ImportSelectionContext?
+    @State private var renameContext: RenameContext?
     @State private var playerMode: PlayerMode = .singleLocation
     @State private var pendingLocationSaveTask: Task<Void, Never>?
     @State private var pendingRouteSaveTask: Task<Void, Never>?
@@ -178,6 +179,20 @@ struct LocationPlayerView: View {
                 syncSelectionFromViewModel()
             }
         }
+        .sheet(item: $renameContext) { context in
+            RenameItemSheet(
+                title: context.title,
+                initialName: context.currentName
+            ) { newName in
+                switch context.item {
+                case .location(let locationID):
+                    viewModel.renameLocation(id: locationID, to: newName)
+                case .route(let routeID):
+                    viewModel.renameRoute(id: routeID, to: newName)
+                }
+                syncSelectionFromViewModel()
+            }
+        }
         .fileImporter(
             isPresented: $isFileImporterPresented,
             allowedContentTypes: allowedImportContentTypes,
@@ -322,6 +337,10 @@ struct LocationPlayerView: View {
                             Button("Add") {
                                 openLocationMapPicker()
                             }
+                            Button("Rename") {
+                                beginRenameSelectedLocation()
+                            }
+                            .disabled(viewModel.selectedLocationID == nil)
                             Button("Delete") {
                                 viewModel.deleteSelectedLocation()
                                 syncSelectionFromViewModel()
@@ -351,6 +370,10 @@ struct LocationPlayerView: View {
                                 viewModel.addRoute()
                                 syncSelectionFromViewModel()
                             }
+                            Button("Rename") {
+                                beginRenameSelectedRoute()
+                            }
+                            .disabled(viewModel.selectedRouteID == nil)
                             Button("Delete") {
                                 viewModel.deleteSelectedRoute()
                                 syncSelectionFromViewModel()
@@ -923,6 +946,24 @@ struct LocationPlayerView: View {
         showLibraryExporter = true
     }
 
+    private func beginRenameSelectedLocation() {
+        flushLocationDraftSave()
+        guard let selectedLocationID = viewModel.selectedLocationID,
+              let location = viewModel.locations.first(where: { $0.id == selectedLocationID }) else {
+            return
+        }
+        renameContext = RenameContext(item: .location(location.id), currentName: location.name)
+    }
+
+    private func beginRenameSelectedRoute() {
+        flushRouteDraftSave()
+        guard let selectedRouteID = viewModel.selectedRouteID,
+              let route = viewModel.routes.first(where: { $0.id == selectedRouteID }) else {
+            return
+        }
+        renameContext = RenameContext(item: .route(route.id), currentName: route.name)
+    }
+
     private var libraryExportFilename: String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -934,6 +975,67 @@ struct LocationPlayerView: View {
 private struct GPXImportContext: Identifiable {
     let id = UUID()
     let preview: GPXImportPreview
+}
+
+private struct RenameContext: Identifiable {
+    enum Item {
+        case location(UUID)
+        case route(UUID)
+    }
+
+    let id = UUID()
+    let item: Item
+    let currentName: String
+
+    var title: String {
+        switch item {
+        case .location:
+            return "Rename Location"
+        case .route:
+            return "Rename Route"
+        }
+    }
+}
+
+private struct RenameItemSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let title: String
+    let initialName: String
+    let onConfirm: (String) -> Void
+
+    @State private var name: String
+
+    init(title: String, initialName: String, onConfirm: @escaping (String) -> Void) {
+        self.title = title
+        self.initialName = initialName
+        self.onConfirm = onConfirm
+        _name = State(initialValue: initialName)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+
+            TextField("Name", text: $name)
+                .textFieldStyle(.roundedBorder)
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                Button("Save") {
+                    onConfirm(name)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding()
+        .frame(width: 360)
+    }
 }
 
 private struct GPXImportPreviewSheet: View {
