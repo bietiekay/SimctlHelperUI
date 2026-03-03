@@ -32,6 +32,8 @@ enum SimctlError: LocalizedError {
 }
 
 protocol SimctlLocationControlling: AnyObject {
+    func fetchDeviceList() async throws -> SimctlListResponse
+    func bootDevice(udid: String) async throws
     func setLocation(udid: String, point: GeoPoint) async throws
     func clearLocation(udid: String) async throws
     func startRoute(udid: String, route: SavedRoute) async throws
@@ -97,9 +99,9 @@ private struct RouteSession {
 
 private final class RouteSessionStore: @unchecked Sendable {
     private let lock = NSLock()
-    private var sessions: [String: RouteSession] = [:]
-    private var states: [String: PlaybackState] = [:]
-    private var stoppingUDIDs: Set<String> = []
+    nonisolated(unsafe) private var sessions: [String: RouteSession] = [:]
+    nonisolated(unsafe) private var states: [String: PlaybackState] = [:]
+    nonisolated(unsafe) private var stoppingUDIDs: Set<String> = []
 
     nonisolated func setSession(_ session: RouteSession, for udid: String) {
         lock.lock()
@@ -113,17 +115,28 @@ private final class RouteSessionStore: @unchecked Sendable {
         return sessions[udid]
     }
 
-    nonisolated func removeSession(for udid: String) -> Bool {
+    nonisolated func removeSession(for udid: String) {
         lock.lock()
         defer { lock.unlock() }
         sessions.removeValue(forKey: udid)
-        return stoppingUDIDs.remove(udid) != nil
     }
 
     nonisolated func markStopping(_ udid: String) {
         lock.lock()
         defer { lock.unlock() }
         stoppingUDIDs.insert(udid)
+    }
+
+    nonisolated func consumeStopping(_ udid: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stoppingUDIDs.remove(udid) != nil
+    }
+
+    nonisolated func isStopping(_ udid: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stoppingUDIDs.contains(udid)
     }
 
     nonisolated func setPlaybackState(_ state: PlaybackState, for udid: String) {
@@ -163,9 +176,28 @@ class SimctlService: SimctlLocationControlling {
 
     private init() {}
 
+    nonisolated private func logDebug(_ message: String) {
+        RouteDebugLogStore.shared.log("SimctlService: \(message)")
+    }
+
+    nonisolated private func summarize(_ value: String, limit: Int = 280) -> String {
+        guard !value.isEmpty else { return "<empty>" }
+        let singleLine = value.replacingOccurrences(of: "\n", with: "\\n")
+        if singleLine.count <= limit {
+            return singleLine
+        }
+        return "\(singleLine.prefix(limit))..."
+    }
+
     // MARK: - Command Execution
 
-    private func executeCommand(_ arguments: [String]) async throws -> (output: String, error: String) {
+    private func executeCommand(
+        _ arguments: [String],
+        timeoutNanoseconds: UInt64 = 30_000_000_000
+    ) async throws -> (output: String, error: String) {
+        let commandLine = "xcrun simctl \(arguments.joined(separator: " "))"
+        logDebug("executeCommand start: \(commandLine), timeout=\(Double(timeoutNanoseconds) / 1_000_000_000)s")
+
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
@@ -226,6 +258,12 @@ class SimctlService: SimctlLocationControlling {
                 errorPipe.fileHandleForReading.closeFile()
 
                 let (output, error) = collector.finalize(remainingOutput: remainingOutput, remainingError: remainingError)
+                self.logDebug(
+                    """
+                    executeCommand end: \(commandLine), status=\(process.terminationStatus), \
+                    output=\(self.summarize(output)), error=\(self.summarize(error))
+                    """
+                )
 
                 if process.terminationStatus != 0 {
                     resumeOnce(.failure(SimctlError.commandFailed(error.isEmpty ? output : error)))
@@ -236,23 +274,29 @@ class SimctlService: SimctlLocationControlling {
 
             do {
                 try process.run()
+                self.logDebug("executeCommand launched: \(commandLine), pid=\(process.processIdentifier)")
 
                 Task {
-                    try? await Task.sleep(nanoseconds: 30_000_000_000) // 30 seconds
+                    try? await Task.sleep(nanoseconds: timeoutNanoseconds)
                     if process.isRunning {
-                        if collector.tryResume() {
-                            process.terminate()
-                            resumeOnce(.failure(SimctlError.commandFailed("Command timed out after 30 seconds")))
-                        }
+                        self.logDebug("executeCommand timeout hit: \(commandLine), pid=\(process.processIdentifier)")
+                        process.terminate()
+                        let timeoutSeconds = Double(timeoutNanoseconds) / 1_000_000_000
+                        resumeOnce(.failure(SimctlError.commandFailed("Command timed out after \(timeoutSeconds) seconds")))
                     }
                 }
             } catch {
+                self.logDebug("executeCommand failed to launch: \(commandLine), error=\(error.localizedDescription)")
                 resumeOnce(.failure(error))
             }
         }
     }
 
-    private func createLongRunningProcess(arguments: [String], collector: CommandDataCollector) -> (process: Process, outputPipe: Pipe, errorPipe: Pipe) {
+    private func createLongRunningProcess(
+        arguments: [String],
+        collector: CommandDataCollector,
+        standardInputPipe: Pipe? = nil
+    ) -> (process: Process, outputPipe: Pipe, errorPipe: Pipe, inputPipe: Pipe) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         process.arguments = ["simctl"] + arguments
@@ -263,9 +307,10 @@ class SimctlService: SimctlLocationControlling {
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
+        let inputPipe = standardInputPipe ?? Pipe()
         process.standardOutput = outputPipe
         process.standardError = errorPipe
-        process.standardInput = Pipe()
+        process.standardInput = inputPipe
 
         outputPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
@@ -285,7 +330,129 @@ class SimctlService: SimctlLocationControlling {
             }
         }
 
-        return (process: process, outputPipe: outputPipe, errorPipe: errorPipe)
+        return (process: process, outputPipe: outputPipe, errorPipe: errorPipe, inputPipe: inputPipe)
+    }
+
+    nonisolated private func runningExternalLocationStartPIDs(for udid: String) -> [pid_t] {
+        logDebug("Scanning external route-start processes for udid=\(udid)")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-ax", "-o", "pid=,command="]
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+        } catch {
+            logDebug("Failed to run ps -ax for udid=\(udid): \(error.localizedDescription)")
+            return []
+        }
+
+        // Drain output before waiting to avoid pipe backpressure deadlocks on busy systems.
+        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        outputPipe.fileHandleForReading.closeFile()
+
+        guard process.terminationStatus == 0 else {
+            logDebug("ps -ax returned non-zero status=\(process.terminationStatus) while scanning udid=\(udid)")
+            return []
+        }
+
+        guard let output = String(data: data, encoding: .utf8) else {
+            return []
+        }
+
+        let token = "simctl location \(udid) start"
+        var pids: [pid_t] = []
+
+        for line in output.split(separator: "\n") {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmedLine.isEmpty else { continue }
+
+            let parts = trimmedLine.split(maxSplits: 1, whereSeparator: { $0.isWhitespace })
+            guard parts.count == 2 else { continue }
+            guard let pid = Int32(parts[0]) else { continue }
+
+            let command = String(parts[1]).trimmingCharacters(in: .whitespaces)
+            if command.localizedCaseInsensitiveContains(token) && pid != getpid() {
+                pids.append(pid)
+            }
+        }
+
+        logDebug("Found \(pids.count) external route-start processes for udid=\(udid): \(pids.map(String.init).joined(separator: ","))")
+        return pids
+    }
+
+    nonisolated private func commandLine(for pid: pid_t) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", String(pid), "-o", "command="]
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+        } catch {
+            logDebug("Failed to inspect pid=\(pid): \(error.localizedDescription)")
+            return nil
+        }
+
+        // Read first, then wait to avoid potential deadlock when stdout pipe fills.
+        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        outputPipe.fileHandleForReading.closeFile()
+
+        guard process.terminationStatus == 0 else {
+            logDebug("ps -p failed for pid=\(pid), status=\(process.terminationStatus)")
+            return nil
+        }
+
+        guard let output = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        let command = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return command.isEmpty ? nil : command
+    }
+
+    nonisolated private func terminateExternalLocationStartProcesses(for udid: String) {
+        let token = "simctl location \(udid) start"
+        let pids = runningExternalLocationStartPIDs(for: udid)
+        guard !pids.isEmpty else {
+            logDebug("No external route-start processes to terminate for udid=\(udid)")
+            return
+        }
+
+        logDebug("Terminating \(pids.count) external route-start process(es) for udid=\(udid)")
+
+        for pid in pids {
+            _ = kill(pid, SIGTERM)
+        }
+
+        usleep(200_000)
+
+        for pid in pids where kill(pid, 0) == 0 {
+            guard let command = commandLine(for: pid),
+                  command.localizedCaseInsensitiveContains(token),
+                  pid != getpid() else {
+                continue
+            }
+            _ = kill(pid, SIGKILL)
+            logDebug("SIGKILL sent to stubborn external process pid=\(pid) for udid=\(udid)")
+        }
+    }
+
+    private func terminateExternalLocationStartProcessesAsync(for udid: String) async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async { [self] in
+                terminateExternalLocationStartProcesses(for: udid)
+                continuation.resume()
+            }
+        }
     }
 
     // MARK: - Fetch Device List
@@ -371,18 +538,107 @@ class SimctlService: SimctlLocationControlling {
     }
 
     func clearLocation(udid: String) async throws {
-        _ = try await executeCommand(["location", udid, "clear"])
+        _ = try await executeCommand(
+            ["location", udid, "clear"],
+            timeoutNanoseconds: 5_000_000_000
+        )
     }
 
     func startRoute(udid: String, route: SavedRoute) async throws {
         try route.validate()
+        logDebug(
+            """
+            startRoute requested: udid=\(udid), routeID=\(route.id.uuidString), \
+            waypoints=\(route.waypoints.count), speed=\(route.speedMetersPerSecond), mode=\(route.updateMode)
+            """
+        )
 
         // Stop any existing run for this simulator before starting a new one.
-        await stopRoute(udid: udid)
+        // Route startup should not block on `location clear`; terminate any active route process and continue.
+        await stopRoute(udid: udid, shouldClearLocation: false)
 
+        let segments: [[GeoPoint]]
+        if route.waypoints.count > LocationCommandBuilder.maxWaypointsPerSegment {
+            // Newer simctl variants may return immediately after parsing and treat repeated `start`
+            // calls like replacements. For large routes, send one full payload via STDIN instead.
+            segments = [route.waypoints]
+            logDebug(
+                """
+                startRoute using single payload mode for large route: udid=\(udid), \
+                totalWaypoints=\(route.waypoints.count), segmentCount=1 (chunking disabled)
+                """
+            )
+        } else {
+            segments = try LocationCommandBuilder.waypointSegments(route: route)
+            logDebug("startRoute segmented route for udid=\(udid): segmentCount=\(segments.count)")
+        }
+
+        routeSessions.setPlaybackState(.running(routeID: route.id), for: udid)
+        do {
+            try startRouteSegment(
+                udid: udid,
+                route: route,
+                segments: segments,
+                segmentIndex: 0
+            )
+        } catch {
+            routeSessions.clearState(for: udid)
+            logDebug("startRoute failed for udid=\(udid), routeID=\(route.id.uuidString): \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    private func startRouteSegment(
+        udid: String,
+        route: SavedRoute,
+        segments: [[GeoPoint]],
+        segmentIndex: Int
+    ) throws {
+        guard !routeSessions.isStopping(udid) else {
+            _ = routeSessions.consumeStopping(udid)
+            routeSessions.setPlaybackState(.idle, for: udid)
+            logDebug("Skipping segment start because stop was requested for udid=\(udid)")
+            return
+        }
+
+        guard segmentIndex < segments.count else {
+            routeSessions.setPlaybackState(.finished, for: udid)
+            logDebug("Route finished for udid=\(udid), routeID=\(route.id.uuidString)")
+            return
+        }
+
+        let segmentRoute = SavedRoute(
+            id: route.id,
+            name: route.name,
+            waypoints: segments[segmentIndex],
+            speedMetersPerSecond: route.speedMetersPerSecond,
+            updateMode: route.updateMode
+        )
         let collector = CommandDataCollector()
-        let arguments = try LocationCommandBuilder.startArguments(udid: udid, route: route)
-        let runnable = createLongRunningProcess(arguments: arguments, collector: collector)
+        let useWaypointSTDIN = segmentRoute.waypoints.count > 250
+        let waypointInputMode: LocationCommandBuilder.WaypointInputMode = useWaypointSTDIN ? .stdin : .arguments
+        let arguments = try LocationCommandBuilder.startArguments(
+            udid: udid,
+            route: segmentRoute,
+            waypointInputMode: waypointInputMode
+        )
+        let waypointSTDINData = useWaypointSTDIN ? try LocationCommandBuilder.waypointSTDINData(route: segmentRoute) : nil
+        let waypointInputPipe = useWaypointSTDIN ? Pipe() : nil
+        let firstPoint = segmentRoute.waypoints.first.map { "(\($0.lat),\($0.lon))" } ?? "<none>"
+        let lastPoint = segmentRoute.waypoints.last.map { "(\($0.lat),\($0.lon))" } ?? "<none>"
+        logDebug(
+            """
+            startRouteSegment: udid=\(udid), routeID=\(route.id.uuidString), \
+            segment=\(segmentIndex + 1)/\(segments.count), segmentWaypoints=\(segmentRoute.waypoints.count), \
+            waypointInputMode=\(useWaypointSTDIN ? "stdin" : "arguments"), \
+            first=\(firstPoint), last=\(lastPoint)
+            """
+        )
+        let runnable = createLongRunningProcess(
+            arguments: arguments,
+            collector: collector,
+            standardInputPipe: waypointInputPipe
+        )
 
         let session = RouteSession(
             process: runnable.process,
@@ -397,84 +653,154 @@ class SimctlService: SimctlLocationControlling {
 
         runnable.process.terminationHandler = { [weak self] process in
             guard let self else { return }
-
-            runnable.outputPipe.fileHandleForReading.readabilityHandler = nil
-            runnable.errorPipe.fileHandleForReading.readabilityHandler = nil
-
-            let remainingOutput = runnable.outputPipe.fileHandleForReading.availableData
-            let remainingError = runnable.errorPipe.fileHandleForReading.availableData
-
-            runnable.outputPipe.fileHandleForReading.closeFile()
-            runnable.errorPipe.fileHandleForReading.closeFile()
-
-            let (output, error) = collector.finalize(remainingOutput: remainingOutput, remainingError: remainingError)
-            let combinedMessage = error.isEmpty ? output : error
-            let wasStopping = self.routeSessions.removeSession(for: udid)
-
-            if wasStopping {
-                self.routeSessions.setPlaybackState(.idle, for: udid)
-                return
-            }
-
-            if process.terminationStatus == 0 {
-                self.routeSessions.setPlaybackState(.finished, for: udid)
-            } else {
-                let message = combinedMessage.isEmpty ? "Route process terminated with status \(process.terminationStatus)." : combinedMessage
-                self.routeSessions.setPlaybackState(.failed(message: message), for: udid)
-            }
+            self.handleRouteSegmentTermination(
+                udid: udid,
+                route: route,
+                segments: segments,
+                segmentIndex: segmentIndex,
+                process: process,
+                runnable: runnable,
+                collector: collector
+            )
         }
 
         do {
             try runnable.process.run()
+            logDebug("Route segment process launched: udid=\(udid), routeID=\(route.id.uuidString), pid=\(runnable.process.processIdentifier)")
+            if let waypointSTDINData {
+                DispatchQueue.global(qos: .userInitiated).async {
+                    runnable.inputPipe.fileHandleForWriting.write(waypointSTDINData)
+                    try? runnable.inputPipe.fileHandleForWriting.close()
+                }
+            }
         } catch {
-            routeSessions.clearState(for: udid)
+            routeSessions.removeSession(for: udid)
+            logDebug("Failed to launch route segment process for udid=\(udid), routeID=\(route.id.uuidString): \(error.localizedDescription)")
             throw error
+        }
+    }
+
+    private func handleRouteSegmentTermination(
+        udid: String,
+        route: SavedRoute,
+        segments: [[GeoPoint]],
+        segmentIndex: Int,
+        process: Process,
+        runnable: (process: Process, outputPipe: Pipe, errorPipe: Pipe, inputPipe: Pipe),
+        collector: CommandDataCollector
+    ) {
+        runnable.outputPipe.fileHandleForReading.readabilityHandler = nil
+        runnable.errorPipe.fileHandleForReading.readabilityHandler = nil
+
+        let remainingOutput = runnable.outputPipe.fileHandleForReading.availableData
+        let remainingError = runnable.errorPipe.fileHandleForReading.availableData
+
+        runnable.outputPipe.fileHandleForReading.closeFile()
+        runnable.errorPipe.fileHandleForReading.closeFile()
+        try? runnable.inputPipe.fileHandleForWriting.close()
+
+        let (output, error) = collector.finalize(remainingOutput: remainingOutput, remainingError: remainingError)
+        let combinedMessage = error.isEmpty ? output : error
+        logDebug(
+            """
+            Route segment terminated: udid=\(udid), routeID=\(route.id.uuidString), \
+            segment=\(segmentIndex + 1)/\(segments.count), status=\(process.terminationStatus), \
+            message=\(summarize(combinedMessage))
+            """
+        )
+
+        routeSessions.removeSession(for: udid)
+
+        if routeSessions.consumeStopping(udid) {
+            routeSessions.setPlaybackState(.idle, for: udid)
+            logDebug("Route termination was expected due to stop request for udid=\(udid)")
+            return
+        }
+
+        if process.terminationStatus != 0 {
+            let message = combinedMessage.isEmpty ? "Route process terminated with status \(process.terminationStatus)." : combinedMessage
+            routeSessions.setPlaybackState(.failed(message: message), for: udid)
+            logDebug("Route failed for udid=\(udid), routeID=\(route.id.uuidString): \(summarize(message))")
+            return
+        }
+
+        let nextIndex = segmentIndex + 1
+        if nextIndex >= segments.count {
+            routeSessions.setPlaybackState(.finished, for: udid)
+            logDebug("Route completed for udid=\(udid), routeID=\(route.id.uuidString)")
+            return
+        }
+
+        do {
+            try startRouteSegment(
+                udid: udid,
+                route: route,
+                segments: segments,
+                segmentIndex: nextIndex
+            )
+        } catch {
+            routeSessions.setPlaybackState(.failed(message: error.localizedDescription), for: udid)
+            logDebug("Failed to start next segment for udid=\(udid), routeID=\(route.id.uuidString): \(error.localizedDescription)")
         }
     }
 
     func pauseRoute(udid: String) throws {
         guard let session = routeSessions.session(for: udid) else {
+            logDebug("pauseRoute ignored: no active session for udid=\(udid)")
             return
         }
 
         guard session.process.isRunning else {
             routeSessions.setPlaybackState(.finished, for: udid)
+            logDebug("pauseRoute found non-running session for udid=\(udid), marking finished")
             return
         }
 
         let result = kill(session.process.processIdentifier, SIGSTOP)
         guard result == 0 else {
+            logDebug("pauseRoute failed for udid=\(udid), pid=\(session.process.processIdentifier)")
             throw SimctlError.commandFailed("Failed to pause route session.")
         }
 
         routeSessions.setPlaybackState(.paused(routeID: session.routeID), for: udid)
+        logDebug("pauseRoute success for udid=\(udid), pid=\(session.process.processIdentifier), routeID=\(session.routeID.uuidString)")
     }
 
     func resumeRoute(udid: String) throws {
         guard let session = routeSessions.session(for: udid) else {
+            logDebug("resumeRoute ignored: no active session for udid=\(udid)")
             return
         }
 
         guard session.process.isRunning else {
             routeSessions.setPlaybackState(.finished, for: udid)
+            logDebug("resumeRoute found non-running session for udid=\(udid), marking finished")
             return
         }
 
         let result = kill(session.process.processIdentifier, SIGCONT)
         guard result == 0 else {
+            logDebug("resumeRoute failed for udid=\(udid), pid=\(session.process.processIdentifier)")
             throw SimctlError.commandFailed("Failed to resume route session.")
         }
 
         routeSessions.setPlaybackState(.running(routeID: session.routeID), for: udid)
+        logDebug("resumeRoute success for udid=\(udid), pid=\(session.process.processIdentifier), routeID=\(session.routeID.uuidString)")
     }
 
     func stopRoute(udid: String) async {
+        await stopRoute(udid: udid, shouldClearLocation: true)
+    }
+
+    private func stopRoute(udid: String, shouldClearLocation: Bool) async {
+        logDebug("stopRoute requested: udid=\(udid), shouldClearLocation=\(shouldClearLocation)")
+        routeSessions.markStopping(udid)
         if let session = routeSessions.session(for: udid) {
-            routeSessions.markStopping(udid)
             routeSessions.setPlaybackState(.idle, for: udid)
 
             if session.process.isRunning {
                 session.process.terminate()
+                logDebug("Sent terminate to route process pid=\(session.process.processIdentifier) for udid=\(udid)")
 
                 for _ in 0..<10 {
                     if !session.process.isRunning {
@@ -485,17 +811,30 @@ class SimctlService: SimctlLocationControlling {
 
                 if session.process.isRunning {
                     _ = kill(session.process.processIdentifier, SIGKILL)
+                    logDebug("Sent SIGKILL to route process pid=\(session.process.processIdentifier) for udid=\(udid)")
                 }
             }
-        } else {
-            routeSessions.setPlaybackState(.idle, for: udid)
+
+            // Wait briefly so the termination handler can drain pipes and clear session state.
+            for _ in 0..<10 {
+                if routeSessions.session(for: udid) == nil {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
         }
 
-        do {
-            try await clearLocation(udid: udid)
-        } catch {
-            routeSessions.setPlaybackState(.failed(message: error.localizedDescription), for: udid)
+        routeSessions.removeSession(for: udid)
+        _ = routeSessions.consumeStopping(udid)
+        routeSessions.setPlaybackState(.idle, for: udid)
+
+        await terminateExternalLocationStartProcessesAsync(for: udid)
+
+        if shouldClearLocation {
+            // Best-effort cleanup for explicit stop actions.
+            try? await clearLocation(udid: udid)
         }
+        logDebug("stopRoute finished: udid=\(udid), shouldClearLocation=\(shouldClearLocation)")
     }
 
     func playbackState(udid: String) -> PlaybackState {

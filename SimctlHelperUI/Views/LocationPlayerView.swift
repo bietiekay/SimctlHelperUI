@@ -1,11 +1,24 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import MapKit
+import AppKit
 
 struct LocationPlayerView: View {
+    private enum FileImportKind {
+        case gpx
+        case library
+    }
+
+    private enum PlayerMode: String, CaseIterable, Identifiable {
+        case singleLocation = "Single Location"
+        case route = "Route"
+
+        var id: Self { self }
+    }
+
     @StateObject var viewModel: LocationPlayerViewModel
-    @State private var showGPXImporter = false
-    @State private var showLibraryImporter = false
+    @State private var activeFileImportKind: FileImportKind?
+    @State private var isFileImporterPresented = false
     @State private var showLibraryExporter = false
     @State private var mapPickerContext: MapPickerContext?
     @State private var selectedLocationID: UUID?
@@ -13,8 +26,28 @@ struct LocationPlayerView: View {
     @State private var locationDraft: SavedLocation?
     @State private var routeDraft: SavedRoute?
     @State private var isSyncingSelection = false
+    @State private var gpxImportContext: GPXImportContext?
     @State private var libraryExportDocument = LocationLibraryDocument(data: Data())
     @State private var importSelectionContext: ImportSelectionContext?
+    @State private var playerMode: PlayerMode = .singleLocation
+    @State private var pendingLocationSaveTask: Task<Void, Never>?
+    @State private var pendingRouteSaveTask: Task<Void, Never>?
+    @State private var isDebugLogExpanded = false
+
+    private var allowedImportContentTypes: [UTType] {
+        switch activeFileImportKind {
+        case .gpx:
+            let gpxType = UTType(filenameExtension: "gpx") ?? .xml
+            return [gpxType, .xml]
+        case .library:
+            return [.json]
+        case .none:
+            return [.data]
+        }
+    }
+
+    private let inlineWaypointEditingLimit = 20
+    private let mapWaypointEditingLimit = 1_500
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,6 +61,7 @@ struct LocationPlayerView: View {
                 detailPanel
                     .frame(minWidth: 500, maxWidth: .infinity)
             }
+            .layoutPriority(1)
 
             Divider()
             playbackControls
@@ -35,6 +69,7 @@ struct LocationPlayerView: View {
         .navigationTitle("Location Player - \(viewModel.deviceName)")
         .onAppear {
             viewModel.start()
+            ensureSelectionForCurrentMode()
             syncSelectionFromViewModel()
         }
         .onDisappear {
@@ -42,13 +77,37 @@ struct LocationPlayerView: View {
         }
         .onChange(of: selectedLocationID) { _, value in
             guard !isSyncingSelection else { return }
+
+            if value == nil,
+               playerMode == .singleLocation,
+               !viewModel.locations.isEmpty,
+               let existing = viewModel.selectedLocationID {
+                // Ignore transient list deselection while rows are being refreshed.
+                isSyncingSelection = true
+                selectedLocationID = existing
+                isSyncingSelection = false
+                return
+            }
+
             viewModel.selectLocation(value)
-            syncSelectionFromViewModel()
+            syncLocationDraft()
         }
         .onChange(of: selectedRouteID) { _, value in
             guard !isSyncingSelection else { return }
+
+            if value == nil,
+               playerMode == .route,
+               !viewModel.routes.isEmpty,
+               let existing = viewModel.selectedRouteID {
+                // Ignore transient list deselection while rows are being refreshed.
+                isSyncingSelection = true
+                selectedRouteID = existing
+                isSyncingSelection = false
+                return
+            }
+
             viewModel.selectRoute(value)
-            syncSelectionFromViewModel()
+            syncRouteDraft()
         }
         .onChange(of: viewModel.selectedLocationID) { _, value in
             guard value != selectedLocationID else { return }
@@ -63,6 +122,10 @@ struct LocationPlayerView: View {
         }
         .onChange(of: viewModel.routes) { _, _ in
             syncRouteDraft()
+        }
+        .onChange(of: playerMode) { _, _ in
+            ensureSelectionForCurrentMode()
+            syncSelectionFromViewModel()
         }
         .sheet(item: $mapPickerContext) { context in
             CoordinatePickerSheet(
@@ -105,30 +168,37 @@ struct LocationPlayerView: View {
                 syncSelectionFromViewModel()
             }
         }
-        .fileImporter(
-            isPresented: $showGPXImporter,
-            allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                guard let fileURL = urls.first else { return }
-                viewModel.importRoute(from: fileURL)
+        .sheet(item: $gpxImportContext) { context in
+            GPXImportPreviewSheet(preview: context.preview) { selectedTimeRange, selectedPointRange in
+                viewModel.importRoute(
+                    from: context.preview,
+                    selectedTimeRange: selectedTimeRange,
+                    selectedPointRange: selectedPointRange
+                )
                 syncSelectionFromViewModel()
-            case .failure(let error):
-                viewModel.errorMessage = error.localizedDescription
             }
         }
         .fileImporter(
-            isPresented: $showLibraryImporter,
-            allowedContentTypes: [.json],
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: allowedImportContentTypes,
             allowsMultipleSelection: false
         ) { result in
+            let importKind = activeFileImportKind
+            activeFileImportKind = nil
+
             switch result {
             case .success(let urls):
                 guard let fileURL = urls.first else { return }
-                guard let importedLibrary = viewModel.importLibrary(from: fileURL) else { return }
-                importSelectionContext = ImportSelectionContext(library: importedLibrary)
+                switch importKind {
+                case .gpx:
+                    guard let preview = viewModel.prepareGPXImport(from: fileURL) else { return }
+                    gpxImportContext = GPXImportContext(preview: preview)
+                case .library:
+                    guard let importedLibrary = viewModel.importLibrary(from: fileURL) else { return }
+                    importSelectionContext = ImportSelectionContext(library: importedLibrary)
+                case .none:
+                    break
+                }
             case .failure(let error):
                 viewModel.errorMessage = error.localizedDescription
             }
@@ -147,22 +217,75 @@ struct LocationPlayerView: View {
 
     private var headerView: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Location Player - \(viewModel.deviceName)")
-                .font(.headline)
-            Text("UDID: \(viewModel.udid)")
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.secondary)
-            HStack {
-                Circle()
-                    .fill(viewModel.isDeviceBooted ? .green : .gray)
-                    .frame(width: 10, height: 10)
-                Text(viewModel.isDeviceBooted ? "Booted" : "Shutdown")
+            HStack(alignment: .center, spacing: 12) {
+                Text("Target Device")
                     .font(.subheadline)
-                    .foregroundColor(viewModel.isDeviceBooted ? .primary : .secondary)
+                    .fontWeight(.semibold)
+
+                Picker(
+                    "Target Device",
+                    selection: Binding(
+                        get: { viewModel.udid },
+                        set: { viewModel.selectTargetDevice($0) }
+                    )
+                ) {
+                    if viewModel.availableDevices.isEmpty {
+                        Text("No devices found").tag("")
+                    } else {
+                        ForEach(viewModel.availableDevices) { device in
+                            Text("\(device.name) (\(device.isBooted ? "Booted" : "Shutdown"))")
+                                .tag(device.udid)
+                        }
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(minWidth: 300)
+                .disabled(viewModel.availableDevices.isEmpty)
+
+                Toggle("Auto-Boot on Send", isOn: $viewModel.autoBootOnSend)
+                    .toggleStyle(.checkbox)
+
+                Spacer()
             }
-            Text("Default Location: \(viewModel.defaultLocationName)")
-                .font(.caption)
-                .foregroundColor(.secondary)
+
+            HStack(spacing: 12) {
+                Text("Mode")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+
+                Picker("Mode", selection: $playerMode) {
+                    ForEach(PlayerMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 320)
+
+                Spacer()
+            }
+
+            HStack(spacing: 12) {
+                Text("UDID: \(viewModel.udid)")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(.secondary)
+
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(viewModel.isDeviceBooted ? .green : .gray)
+                        .frame(width: 8, height: 8)
+                    Text(viewModel.isDeviceBooted ? "Booted" : "Shutdown")
+                        .font(.caption)
+                        .foregroundColor(viewModel.isDeviceBooted ? .primary : .secondary)
+                }
+
+                Text("Default: \(viewModel.defaultLocationName)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+
+                Spacer()
+            }
 
             if let errorMessage = viewModel.errorMessage {
                 Text(errorMessage)
@@ -176,66 +299,70 @@ struct LocationPlayerView: View {
 
     private var libraryPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            GroupBox("Locations") {
-                VStack(spacing: 8) {
-                    List(selection: $selectedLocationID) {
-                        ForEach(viewModel.locations) { location in
-                            HStack {
-                                Text(location.name)
-                                Spacer()
-                                if viewModel.defaultLocationID == location.id {
-                                    Image(systemName: "star.fill")
-                                        .foregroundColor(.yellow)
+            switch playerMode {
+            case .singleLocation:
+                GroupBox("Locations") {
+                    VStack(spacing: 8) {
+                        List(selection: $selectedLocationID) {
+                            ForEach(viewModel.locations) { location in
+                                HStack {
+                                    Text(location.name)
+                                    Spacer()
+                                    if viewModel.defaultLocationID == location.id {
+                                        Image(systemName: "star.fill")
+                                            .foregroundColor(.yellow)
+                                    }
                                 }
+                                .tag(location.id)
                             }
-                            .tag(location.id)
                         }
-                    }
-                    .frame(minHeight: 180)
+                        .frame(minHeight: 180)
 
-                    HStack {
-                        Button("Add") {
-                            openLocationMapPicker()
+                        HStack {
+                            Button("Add") {
+                                openLocationMapPicker()
+                            }
+                            Button("Delete") {
+                                viewModel.deleteSelectedLocation()
+                                syncSelectionFromViewModel()
+                            }
+                            .disabled(viewModel.selectedLocationID == nil)
+                            Button("Set Default") {
+                                viewModel.setDefaultLocationToSelection()
+                            }
+                            .disabled(viewModel.selectedLocationID == nil)
                         }
-                        Button("Delete") {
-                            viewModel.deleteSelectedLocation()
-                            syncSelectionFromViewModel()
-                        }
-                        .disabled(viewModel.selectedLocationID == nil)
-                        Button("Set Default") {
-                            viewModel.setDefaultLocationToSelection()
-                        }
-                        .disabled(viewModel.selectedLocationID == nil)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-            }
+            case .route:
+                GroupBox("Routes") {
+                    VStack(spacing: 8) {
+                        List(selection: $selectedRouteID) {
+                            ForEach(viewModel.routes) { route in
+                                Text(route.name)
+                                    .tag(route.id)
+                            }
+                        }
+                        .frame(minHeight: 180)
 
-            GroupBox("Routes") {
-                VStack(spacing: 8) {
-                    List(selection: $selectedRouteID) {
-                        ForEach(viewModel.routes) { route in
-                            Text(route.name)
-                                .tag(route.id)
+                        HStack {
+                            Button("Add") {
+                                viewModel.addRoute()
+                                syncSelectionFromViewModel()
+                            }
+                            Button("Delete") {
+                                viewModel.deleteSelectedRoute()
+                                syncSelectionFromViewModel()
+                            }
+                            .disabled(viewModel.selectedRouteID == nil)
+                            Button("Import GPX") {
+                                activeFileImportKind = .gpx
+                                isFileImporterPresented = true
+                            }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(minHeight: 180)
-
-                    HStack {
-                        Button("Add") {
-                            viewModel.addRoute()
-                            syncSelectionFromViewModel()
-                        }
-                        Button("Delete") {
-                            viewModel.deleteSelectedRoute()
-                            syncSelectionFromViewModel()
-                        }
-                        .disabled(viewModel.selectedRouteID == nil)
-                        Button("Import GPX") {
-                            showGPXImporter = true
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
 
@@ -245,7 +372,8 @@ struct LocationPlayerView: View {
                         beginLibraryExport()
                     }
                     Button("Import...") {
-                        showLibraryImporter = true
+                        activeFileImportKind = .library
+                        isFileImporterPresented = true
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -259,17 +387,21 @@ struct LocationPlayerView: View {
     private var detailPanel: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                if let locationDraft {
-                    locationDetails(location: locationDraft)
-                }
-
-                if let routeDraft {
-                    routeDetails(route: routeDraft)
-                }
-
-                if locationDraft == nil && routeDraft == nil {
-                    Text("Select a location or route from the library.")
-                        .foregroundColor(.secondary)
+                switch playerMode {
+                case .singleLocation:
+                    if let locationDraft {
+                        locationDetails(location: locationDraft)
+                    } else {
+                        Text("Select a location from the library.")
+                            .foregroundColor(.secondary)
+                    }
+                case .route:
+                    if let routeDraft {
+                        routeDetails(route: routeDraft)
+                    } else {
+                        Text("Select a route from the library.")
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             .padding()
@@ -304,11 +436,6 @@ struct LocationPlayerView: View {
                 ), format: .number.precision(.fractionLength(1...8)))
             }
 
-            Button("Apply Location") {
-                viewModel.applySelectedLocation()
-            }
-            .disabled(!viewModel.isDeviceBooted)
-
             Button("Edit On Map") {
                 openLocationEditMapPicker(location)
             }
@@ -319,7 +446,11 @@ struct LocationPlayerView: View {
     }
 
     private func routeDetails(route: SavedRoute) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let waypoints = routeDraft?.waypoints ?? route.waypoints
+        let directlyVisibleWaypoints = Array(waypoints.prefix(inlineWaypointEditingLimit))
+        let hiddenWaypointCount = max(0, waypoints.count - directlyVisibleWaypoints.count)
+
+        return VStack(alignment: .leading, spacing: 12) {
             Text("Route Details")
                 .font(.headline)
 
@@ -401,7 +532,7 @@ struct LocationPlayerView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Waypoints")
+                    Text("Waypoints (\(waypoints.count))")
                         .font(.subheadline)
                         .fontWeight(.semibold)
                     Spacer()
@@ -410,7 +541,29 @@ struct LocationPlayerView: View {
                     }
                 }
 
-                ForEach(routeDraft?.waypoints ?? route.waypoints) { waypoint in
+                if hiddenWaypointCount > 0 {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Direct edit is limited to the first \(inlineWaypointEditingLimit) waypoints.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        if let first = waypoints.first, let last = waypoints.last {
+                            Text(
+                                String(
+                                    format: "Start: %.6f, %.6f  |  End: %.6f, %.6f",
+                                    locale: Locale(identifier: "en_US_POSIX"),
+                                    first.lat, first.lon, last.lat, last.lon
+                                )
+                            )
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.secondary)
+                        }
+                        Text("+ \(hiddenWaypointCount) additional waypoints hidden in direct editor.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                ForEach(directlyVisibleWaypoints) { waypoint in
                     HStack(spacing: 8) {
                         TextField("Lat", value: Binding(
                             get: { waypointLatitude(for: waypoint.id) ?? waypoint.lat },
@@ -450,44 +603,124 @@ struct LocationPlayerView: View {
 
     private var playbackControls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !viewModel.isDeviceBooted {
-                Text("Simulator is not booted. Playback controls are disabled.")
+            if !viewModel.hasTargetDevice {
+                Text("No target simulator selected.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if !viewModel.isDeviceBooted, viewModel.autoBootOnSend {
+                Text("Selected simulator is shutdown. Actions will boot it automatically.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if !viewModel.isDeviceBooted {
+                Text("Selected simulator is shutdown.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
 
-            HStack {
-                Button("Play") {
-                    viewModel.playSelectedRoute()
+            if playerMode == .singleLocation {
+                HStack {
+                    Button("Set Location") {
+                        flushLocationDraftSave()
+                        viewModel.applySelectedLocation()
+                    }
+                    .disabled(!viewModel.hasTargetDevice || viewModel.selectedLocationID == nil)
+
+                    Button("Clear Location") {
+                        viewModel.clearAppliedLocation()
+                    }
+                    .disabled(!viewModel.hasTargetDevice)
+
+                    Button("Reset To Default Location") {
+                        flushLocationDraftSave()
+                        viewModel.resetToDefaultLocation()
+                    }
+                    .disabled(!viewModel.hasTargetDevice || viewModel.defaultLocationID == nil)
+
+                    Spacer()
+
+                    Text("Single location mode")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                .disabled(!viewModel.isDeviceBooted || viewModel.selectedRouteID == nil)
+            } else {
+                HStack {
+                    Button("Play") {
+                        flushRouteDraftSave()
+                        viewModel.playSelectedRoute()
+                    }
+                    .disabled(isPlayDisabled)
 
-                Button(pauseButtonTitle) {
-                    viewModel.togglePauseResume()
+                    Button(pauseButtonTitle) {
+                        viewModel.togglePauseResume()
+                    }
+                    .disabled(isPauseDisabled)
+
+                    Button("Stop") {
+                        viewModel.stop()
+                    }
+                    .disabled(isStopDisabled)
+
+                    Spacer()
+
+                    Text(routeStatusText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                .disabled(!viewModel.isDeviceBooted || !canPauseResume)
+            }
 
-                Button("Stop") {
-                    viewModel.stop()
+            GroupBox {
+                DisclosureGroup(isExpanded: $isDebugLogExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Button("Copy Log") {
+                                copyDebugLogToClipboard()
+                            }
+                            .disabled(viewModel.debugLogText.isEmpty)
+
+                            Button("Clear Log") {
+                                viewModel.clearDebugLog()
+                            }
+
+                            Button("Refresh") {
+                                viewModel.refreshDebugLog()
+                            }
+
+                            Spacer()
+                        }
+
+                        ScrollView {
+                            Text(viewModel.debugLogText.isEmpty ? "No debug entries yet." : viewModel.debugLogText)
+                                .font(.system(.caption, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .frame(minHeight: 90, maxHeight: 130)
+                        .padding(6)
+                        .background(Color(NSColor.textBackgroundColor))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                        )
+                        .cornerRadius(6)
+                    }
+                } label: {
+                    HStack {
+                        Text("Debug Log")
+                        Spacer()
+                        Text("\(viewModel.debugLogLineCount) lines")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
-                .disabled(!viewModel.isDeviceBooted || !viewModel.canStopRoute)
-
-                Button("Reset To Default Location") {
-                    viewModel.resetToDefaultLocation()
-                }
-                .disabled(!viewModel.isDeviceBooted || viewModel.defaultLocationID == nil)
-
-                Spacer()
-
-                Text(statusText)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
         }
         .padding()
     }
 
     private var canPauseResume: Bool {
+        guard playerMode == .route else {
+            return false
+        }
         switch viewModel.playbackState {
         case .running, .paused:
             return true
@@ -497,6 +730,9 @@ struct LocationPlayerView: View {
     }
 
     private var pauseButtonTitle: String {
+        guard playerMode == .route else {
+            return "Pause"
+        }
         switch viewModel.playbackState {
         case .running:
             return "Pause"
@@ -507,7 +743,7 @@ struct LocationPlayerView: View {
         }
     }
 
-    private var statusText: String {
+    private var routeStatusText: String {
         switch viewModel.playbackState {
         case .idle:
             return "Idle"
@@ -519,6 +755,31 @@ struct LocationPlayerView: View {
             return "Finished"
         case .failed(let message):
             return "Failed: \(message)"
+        }
+    }
+
+    private var isPlayDisabled: Bool {
+        !viewModel.hasTargetDevice || viewModel.selectedRouteID == nil
+    }
+
+    private var isPauseDisabled: Bool {
+        !viewModel.hasTargetDevice || !canPauseResume
+    }
+
+    private var isStopDisabled: Bool {
+        !viewModel.hasTargetDevice || !viewModel.canStopRoute
+    }
+
+    private func ensureSelectionForCurrentMode() {
+        switch playerMode {
+        case .singleLocation:
+            if viewModel.selectedLocationID == nil {
+                viewModel.selectLocation(viewModel.locations.first?.id)
+            }
+        case .route:
+            if viewModel.selectedRouteID == nil {
+                viewModel.selectRoute(viewModel.routes.first?.id)
+            }
         }
     }
 
@@ -553,14 +814,48 @@ struct LocationPlayerView: View {
         guard var draft = locationDraft else { return }
         update(&draft)
         locationDraft = draft
-        viewModel.replaceLocation(draft)
+        scheduleLocationSave(for: draft)
     }
 
     private func updateRouteDraft(_ update: (inout SavedRoute) -> Void) {
         guard var draft = routeDraft else { return }
         update(&draft)
         routeDraft = draft
-        viewModel.replaceRoute(draft)
+        scheduleRouteSave(for: draft)
+    }
+
+    private func scheduleLocationSave(for draft: SavedLocation) {
+        pendingLocationSaveTask?.cancel()
+        pendingLocationSaveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
+            viewModel.replaceLocation(draft)
+        }
+    }
+
+    private func scheduleRouteSave(for draft: SavedRoute) {
+        pendingRouteSaveTask?.cancel()
+        pendingRouteSaveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
+            viewModel.replaceRoute(draft)
+        }
+    }
+
+    private func flushLocationDraftSave() {
+        pendingLocationSaveTask?.cancel()
+        pendingLocationSaveTask = nil
+        if let draft = locationDraft {
+            viewModel.replaceLocation(draft)
+        }
+    }
+
+    private func flushRouteDraftSave() {
+        pendingRouteSaveTask?.cancel()
+        pendingRouteSaveTask = nil
+        if let draft = routeDraft {
+            viewModel.replaceRoute(draft)
+        }
     }
 
     private func waypointLatitude(for id: UUID) -> Double? {
@@ -598,6 +893,10 @@ struct LocationPlayerView: View {
 
     private func openWaypointMapPicker() {
         let existingWaypoints = routeDraft?.waypoints ?? []
+        guard existingWaypoints.count <= mapWaypointEditingLimit else {
+            viewModel.errorMessage = "Map waypoint editor supports up to \(mapWaypointEditingLimit) waypoints. Reduce route size first."
+            return
+        }
         let initialPoint = existingWaypoints.last
             ?? locationDraft?.point
             ?? viewModel.locations.first?.point
@@ -612,6 +911,12 @@ struct LocationPlayerView: View {
         )
     }
 
+    private func copyDebugLogToClipboard() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(viewModel.debugLogShareText, forType: .string)
+    }
+
     private func beginLibraryExport() {
         guard let data = viewModel.exportLibraryData() else { return }
         libraryExportDocument = LocationLibraryDocument(data: data)
@@ -623,6 +928,394 @@ struct LocationPlayerView: View {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         return "location-library-\(formatter.string(from: Date()))"
+    }
+}
+
+private struct GPXImportContext: Identifiable {
+    let id = UUID()
+    let preview: GPXImportPreview
+}
+
+private struct GPXImportPreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let preview: GPXImportPreview
+    let onImport: (ClosedRange<Date>?, ClosedRange<Int>?) -> Void
+
+    @State private var selectedStartFraction: Double
+    @State private var selectedEndFraction: Double
+    @State private var cameraPosition: MapCameraPosition
+    @State private var visibleRegion: MKCoordinateRegion
+
+    init(preview: GPXImportPreview, onImport: @escaping (ClosedRange<Date>?, ClosedRange<Int>?) -> Void) {
+        self.preview = preview
+        self.onImport = onImport
+
+        let defaultRegion = GPXImportPreviewSheet.mapRegion(for: preview.points.map(\.point))
+        _cameraPosition = State(initialValue: .region(defaultRegion))
+        _visibleRegion = State(initialValue: defaultRegion)
+        _selectedStartFraction = State(initialValue: 0)
+        _selectedEndFraction = State(initialValue: 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Import GPX")
+                .font(.headline)
+            Text(preview.name)
+                .font(.title3)
+            Text(summaryText)
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Map(position: $cameraPosition, interactionModes: [.zoom, .pan]) {
+                if allCoordinates.count > 1 {
+                    MapPolyline(coordinates: allCoordinates)
+                        .stroke(Color.secondary.opacity(0.45), lineWidth: 2)
+                }
+
+                if selectedCoordinates.count > 1 {
+                    MapPolyline(coordinates: selectedCoordinates)
+                        .stroke(.blue, lineWidth: 4)
+                }
+
+                if let first = selectedCoordinates.first {
+                    Marker("Start", coordinate: first)
+                        .tint(.green)
+                }
+
+                if let last = selectedCoordinates.last {
+                    Marker("Ende", coordinate: last)
+                        .tint(.red)
+                }
+            }
+            .mapStyle(.hybrid(elevation: .realistic))
+            .onMapCameraChange(frequency: .continuous) { context in
+                visibleRegion = context.region
+            }
+            .overlay(alignment: .topTrailing) {
+                mapZoomControls
+            }
+            .frame(minHeight: 360)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(preview.canSelectTimeRange ? "Zeitbereich" : "Wegpunktbereich")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+
+                GPXTimelineRangeSelector(
+                    startFraction: $selectedStartFraction,
+                    endFraction: $selectedEndFraction
+                )
+                .frame(height: 36)
+
+                HStack {
+                    Text(selectedRangeStartText)
+                    Spacer()
+                    Text(selectedRangeEndText)
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.secondary)
+            }
+
+            Text(selectionSummaryText)
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if !canImportSelection {
+                Text("Im gewaehlten Bereich muessen mindestens zwei Punkte enthalten sein.")
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                Button("Import Selection") {
+                    onImport(
+                        preview.canSelectTimeRange ? selectedTimeRange : nil,
+                        preview.canSelectTimeRange ? nil : selectedPointRange
+                    )
+                    dismiss()
+                }
+                .disabled(!canImportSelection)
+            }
+        }
+        .padding()
+        .frame(minWidth: 820, minHeight: 700)
+    }
+
+    private var selectedTimeRange: ClosedRange<Date>? {
+        guard let fullTimeRange = preview.timeRange else { return nil }
+        let duration = fullTimeRange.upperBound.timeIntervalSince(fullTimeRange.lowerBound)
+        guard duration > 0 else { return nil }
+        let lower = fullTimeRange.lowerBound.addingTimeInterval(duration * selectedStartFraction)
+        let upper = fullTimeRange.lowerBound.addingTimeInterval(duration * selectedEndFraction)
+        return lower...upper
+    }
+
+    private var selectedPointRange: ClosedRange<Int>? {
+        guard !preview.points.isEmpty else { return nil }
+        let maxIndex = preview.points.count - 1
+        let lower = Int(floor(selectedStartFraction * Double(maxIndex)))
+        let upper = Int(ceil(selectedEndFraction * Double(maxIndex)))
+        let clampedLower = max(0, min(maxIndex, lower))
+        let clampedUpper = max(clampedLower, min(maxIndex, upper))
+        return clampedLower...clampedUpper
+    }
+
+    private var selectedPoints: [GPXTimestampedPoint] {
+        if let selectedTimeRange {
+            return preview.points(in: selectedTimeRange)
+        }
+        if let selectedPointRange {
+            return preview.points(in: selectedPointRange)
+        }
+        return preview.points
+    }
+
+    private var allCoordinates: [CLLocationCoordinate2D] {
+        preview.points.map { point in
+            CLLocationCoordinate2D(latitude: point.point.lat, longitude: point.point.lon)
+        }
+    }
+
+    private var selectedCoordinates: [CLLocationCoordinate2D] {
+        selectedPoints.map { point in
+            CLLocationCoordinate2D(latitude: point.point.lat, longitude: point.point.lon)
+        }
+    }
+
+    private var canImportSelection: Bool {
+        selectedPoints.count >= 2
+    }
+
+    private var summaryText: String {
+        if let fullTimeRange = preview.timeRange {
+            let duration = fullTimeRange.upperBound.timeIntervalSince(fullTimeRange.lowerBound)
+            return "\(preview.totalPointCount) Punkte, Zeitraum: \(formattedDuration(duration))"
+        }
+        return "\(preview.totalPointCount) Punkte (ohne Zeitstempel)"
+    }
+
+    private var selectionSummaryText: String {
+        let base = "\(selectedPoints.count) von \(preview.totalPointCount) Punkten im Importbereich"
+        if let selectedTimeRange {
+            let duration = selectedTimeRange.upperBound.timeIntervalSince(selectedTimeRange.lowerBound)
+            return "\(base) (\(formattedDuration(duration)))"
+        }
+        if let selectedPointRange {
+            return "\(base) (WP \(selectedPointRange.lowerBound + 1)-\(selectedPointRange.upperBound + 1))"
+        }
+        return base
+    }
+
+    private var selectedRangeStartText: String {
+        if let selectedTimeRange {
+            return formattedDate(selectedTimeRange.lowerBound)
+        }
+        if let selectedPointRange {
+            return "WP \(selectedPointRange.lowerBound + 1)"
+        }
+        return "WP 1"
+    }
+
+    private var selectedRangeEndText: String {
+        if let selectedTimeRange {
+            return formattedDate(selectedTimeRange.upperBound)
+        }
+        if let selectedPointRange {
+            return "WP \(selectedPointRange.upperBound + 1)"
+        }
+        return "WP 1"
+    }
+
+    private var mapZoomControls: some View {
+        VStack(spacing: 8) {
+            Button {
+                zoomMap(by: 0.5)
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderedProminent)
+            .help("Zoom in")
+
+            Button {
+                zoomMap(by: 2.0)
+            } label: {
+                Image(systemName: "minus")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.bordered)
+            .help("Zoom out")
+        }
+        .padding(10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .padding(12)
+    }
+
+    private func zoomMap(by factor: Double) {
+        let minDelta = 0.0005
+        let maxDelta = 120.0
+
+        var region = visibleRegion
+        region.span.latitudeDelta = min(max(region.span.latitudeDelta * factor, minDelta), maxDelta)
+        region.span.longitudeDelta = min(max(region.span.longitudeDelta * factor, minDelta), maxDelta)
+        visibleRegion = region
+        cameraPosition = .region(region)
+    }
+
+    private func formattedDate(_ date: Date?) -> String {
+        guard let date else { return "n/a" }
+        return Self.dateFormatter.string(from: date)
+    }
+
+    private func formattedDuration(_ duration: TimeInterval) -> String {
+        let resolved = max(0, duration)
+        return Self.durationFormatter.string(from: resolved) ?? String(format: "%.0fs", resolved)
+    }
+
+    private static func mapRegion(for points: [GeoPoint]) -> MKCoordinateRegion {
+        guard let first = points.first else {
+            return MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: 37.3349, longitude: -122.0090),
+                span: MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.08)
+            )
+        }
+
+        let latitudes = points.map(\.lat)
+        let longitudes = points.map(\.lon)
+        let minLat = latitudes.min() ?? first.lat
+        let maxLat = latitudes.max() ?? first.lat
+        let minLon = longitudes.min() ?? first.lon
+        let maxLon = longitudes.max() ?? first.lon
+
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+
+        let latDelta = max((maxLat - minLat) * 1.25, 0.01)
+        let lonDelta = max((maxLon - minLon) * 1.25, 0.01)
+
+        return MKCoordinateRegion(
+            center: center,
+            span: MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: lonDelta)
+        )
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .medium
+        return formatter
+    }()
+
+    private static let durationFormatter: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.hour, .minute, .second]
+        formatter.unitsStyle = .abbreviated
+        formatter.zeroFormattingBehavior = [.dropLeading]
+        return formatter
+    }()
+}
+
+private struct GPXTimelineRangeSelector: View {
+    @Binding var startFraction: Double
+    @Binding var endFraction: Double
+
+    @State private var startDragOrigin: Double?
+    @State private var endDragOrigin: Double?
+    @State private var rangeDragOrigin: (Double, Double)?
+
+    private let handleDiameter: CGFloat = 16
+
+    var body: some View {
+        GeometryReader { geometry in
+            let trackWidth = max(1, geometry.size.width - handleDiameter)
+            let startX = CGFloat(startFraction) * trackWidth + (handleDiameter / 2)
+            let endX = CGFloat(endFraction) * trackWidth + (handleDiameter / 2)
+            let selectedWidth = max(endX - startX, handleDiameter / 2)
+            let selectedMidX = startX + (selectedWidth / 2)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.2))
+                    .frame(height: 8)
+                    .padding(.horizontal, handleDiameter / 2)
+
+                Capsule()
+                    .fill(Color.accentColor.opacity(0.5))
+                    .frame(width: selectedWidth, height: 8)
+                    .position(x: selectedMidX, y: geometry.size.height / 2)
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                if rangeDragOrigin == nil {
+                                    rangeDragOrigin = (startFraction, endFraction)
+                                }
+
+                                guard let origin = rangeDragOrigin else { return }
+                                let delta = Double(value.translation.width / trackWidth)
+                                let span = origin.1 - origin.0
+                                let minStart = 0.0
+                                let maxStart = 1.0 - span
+                                let clampedStart = min(max(origin.0 + delta, minStart), maxStart)
+                                startFraction = clampedStart
+                                endFraction = clampedStart + span
+                            }
+                            .onEnded { _ in
+                                rangeDragOrigin = nil
+                            }
+                    )
+
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: handleDiameter, height: handleDiameter)
+                    .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
+                    .position(x: startX, y: geometry.size.height / 2)
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                if startDragOrigin == nil {
+                                    startDragOrigin = startFraction
+                                }
+
+                                guard let origin = startDragOrigin else { return }
+                                let delta = Double(value.translation.width / trackWidth)
+                                startFraction = min(max(origin + delta, 0), endFraction)
+                            }
+                            .onEnded { _ in
+                                startDragOrigin = nil
+                            }
+                    )
+
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: handleDiameter, height: handleDiameter)
+                    .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
+                    .position(x: endX, y: geometry.size.height / 2)
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                if endDragOrigin == nil {
+                                    endDragOrigin = endFraction
+                                }
+
+                                guard let origin = endDragOrigin else { return }
+                                let delta = Double(value.translation.width / trackWidth)
+                                endFraction = max(min(origin + delta, 1), startFraction)
+                            }
+                            .onEnded { _ in
+                                endDragOrigin = nil
+                            }
+                    )
+            }
+        }
     }
 }
 
@@ -1157,22 +1850,24 @@ private struct CoordinatePickerSheet: View {
 
     @MainActor
     private func performLocationSearch(query: String) async {
-        var request = MKLocalSearch.Request()
+        let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = query
         request.region = visibleRegion
         request.resultTypes = [.address, .pointOfInterest]
 
         do {
             let response = try await MKLocalSearch(request: request).start()
-            guard let first = response.mapItems.first,
-                  let coordinate = first.placemark.location?.coordinate else {
+            guard let first = response.mapItems.first else {
                 searchStatusMessage = "Kein Treffer fuer \"\(query)\" gefunden."
                 isSearching = false
                 return
             }
 
+            let coordinate = first.location.coordinate
             centerMap(on: coordinate)
-            searchStatusMessage = first.name ?? first.placemark.title ?? "Treffer gefunden"
+            searchStatusMessage = first.name
+                ?? first.addressRepresentations?.fullAddress(includingRegion: false, singleLine: true)
+                ?? "Treffer gefunden"
         } catch {
             searchStatusMessage = "Suche fehlgeschlagen: \(error.localizedDescription)"
         }

@@ -65,15 +65,13 @@ struct DeviceActionsView: View {
                         }
                         .disabled(isPerformingAction)
 
-                        if device.isBooted {
-                            Button(action: {
-                                openWindow(id: "location-player", value: device.udid)
-                            }) {
-                                Label("Location Player", systemImage: "location")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .disabled(isPerformingAction)
+                        Button(action: {
+                            openLocationPlayerWindow(for: device.udid)
+                        }) {
+                            Label("Location Player", systemImage: "location")
+                                .frame(maxWidth: .infinity)
                         }
+                        .disabled(isPerformingAction)
                         
                         // Delete Button
                         Button(role: .destructive, action: {
@@ -85,9 +83,16 @@ struct DeviceActionsView: View {
                         .disabled(isPerformingAction)
                     }
                 } else {
-                    VStack {
+                    VStack(spacing: 12) {
                         Text("No device selected")
                             .foregroundColor(.secondary)
+
+                        Button(action: {
+                            openLocationPlayerWindow(for: nil)
+                        }) {
+                            Label("Open Location Player", systemImage: "location")
+                                .frame(maxWidth: .infinity)
+                        }
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 20)
@@ -152,6 +157,11 @@ struct DeviceActionsView: View {
             }
             isPerformingAction = false
         }
+    }
+
+    @MainActor
+    private func openLocationPlayerWindow(for udid: String?) {
+        LocationPlayerWindowCoordinator.openWindowWithoutStealingFocus(for: udid, openWindow: openWindow)
     }
 }
 

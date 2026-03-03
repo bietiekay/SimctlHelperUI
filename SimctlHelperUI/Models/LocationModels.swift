@@ -1,6 +1,6 @@
 import Foundation
 
-enum LocationValidationError: LocalizedError {
+nonisolated enum LocationValidationError: LocalizedError {
     case invalidLatitude(Double)
     case invalidLongitude(Double)
     case routeNeedsAtLeastTwoWaypoints
@@ -23,7 +23,7 @@ enum LocationValidationError: LocalizedError {
     }
 }
 
-struct GeoPoint: Codable, Identifiable, Equatable {
+nonisolated struct GeoPoint: Codable, Identifiable, Equatable {
     let id: UUID
     var lat: Double
     var lon: Double
@@ -44,7 +44,7 @@ struct GeoPoint: Codable, Identifiable, Equatable {
     }
 }
 
-enum RouteUpdateMode: Codable, Equatable {
+nonisolated enum RouteUpdateMode: Codable, Equatable {
     case interval(seconds: Double)
     case distance(meters: Double)
 
@@ -85,7 +85,7 @@ enum RouteUpdateMode: Codable, Equatable {
     }
 }
 
-struct SavedLocation: Codable, Identifiable, Equatable {
+nonisolated struct SavedLocation: Codable, Identifiable, Equatable {
     let id: UUID
     var name: String
     var point: GeoPoint
@@ -108,7 +108,7 @@ struct SavedLocation: Codable, Identifiable, Equatable {
     }
 }
 
-struct SavedRoute: Codable, Identifiable, Equatable {
+nonisolated struct SavedRoute: Codable, Identifiable, Equatable {
     let id: UUID
     var name: String
     var waypoints: [GeoPoint]
@@ -160,7 +160,7 @@ struct SavedRoute: Codable, Identifiable, Equatable {
     }
 }
 
-enum PlaybackState: Equatable {
+nonisolated enum PlaybackState: Equatable {
     case idle
     case running(routeID: UUID)
     case paused(routeID: UUID)
@@ -168,7 +168,7 @@ enum PlaybackState: Equatable {
     case failed(message: String)
 }
 
-struct LocationLibrary: Codable, Equatable {
+nonisolated struct LocationLibrary: Codable, Equatable {
     var locations: [SavedLocation]
     var routes: [SavedRoute]
     var defaultLocationID: UUID?
@@ -198,7 +198,15 @@ struct LocationLibrary: Codable, Equatable {
     }
 }
 
-enum LocationCommandBuilder {
+nonisolated enum LocationCommandBuilder {
+    enum WaypointInputMode {
+        case arguments
+        case stdin
+    }
+
+    static let maxWaypointsPerSegment = 200
+    static let segmentOverlapCount = 1
+
     static func formatCoordinate(_ value: Double) -> String {
         var formatted = String(format: "%.8f", locale: Locale(identifier: "en_US_POSIX"), value)
 
@@ -217,7 +225,11 @@ enum LocationCommandBuilder {
         "\(formatCoordinate(point.lat)),\(formatCoordinate(point.lon))"
     }
 
-    static func startArguments(udid: String, route: SavedRoute) throws -> [String] {
+    static func startArguments(
+        udid: String,
+        route: SavedRoute,
+        waypointInputMode: WaypointInputMode = .arguments
+    ) throws -> [String] {
         try route.validate()
 
         var arguments = ["location", udid, "start", "--speed=\(formatCoordinate(route.speedMetersPerSecond))"]
@@ -229,7 +241,57 @@ enum LocationCommandBuilder {
             arguments.append("--distance=\(formatCoordinate(meters))")
         }
 
-        arguments.append(contentsOf: route.waypoints.map { formatPoint($0) })
+        switch waypointInputMode {
+        case .arguments:
+            arguments.append(contentsOf: route.waypoints.map { formatPoint($0) })
+        case .stdin:
+            arguments.append("-")
+        }
         return arguments
+    }
+
+    static func waypointSTDINData(route: SavedRoute) throws -> Data {
+        try route.validate()
+        let payload = route.waypoints
+            .map { formatPoint($0) }
+            .joined(separator: "\n")
+            + "\n"
+        return Data(payload.utf8)
+    }
+
+    static func waypointSegments(
+        route: SavedRoute,
+        maxWaypointsPerSegment: Int = maxWaypointsPerSegment,
+        overlapCount: Int = segmentOverlapCount
+    ) throws -> [[GeoPoint]] {
+        try route.validate()
+
+        guard maxWaypointsPerSegment >= 2 else {
+            return [route.waypoints]
+        }
+
+        if route.waypoints.count <= maxWaypointsPerSegment {
+            return [route.waypoints]
+        }
+
+        let effectiveOverlap = max(0, min(overlapCount, maxWaypointsPerSegment - 1))
+        var segments: [[GeoPoint]] = []
+        var startIndex = 0
+
+        while startIndex < route.waypoints.count - 1 {
+            let endIndex = min(route.waypoints.count, startIndex + maxWaypointsPerSegment)
+            let chunk = Array(route.waypoints[startIndex..<endIndex])
+            if chunk.count >= 2 {
+                segments.append(chunk)
+            }
+
+            if endIndex >= route.waypoints.count {
+                break
+            }
+
+            startIndex = max(startIndex + 1, endIndex - effectiveOverlap)
+        }
+
+        return segments.isEmpty ? [route.waypoints] : segments
     }
 }

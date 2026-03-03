@@ -40,6 +40,13 @@ struct ContentView: View {
     private var toolbarView: some View {
         HStack {
             Button(action: {
+                openLocationPlayerWindow(for: nil)
+            }) {
+                Label("Location Player", systemImage: "location")
+            }
+            .disabled(viewModel.isLoading || isDeletingUnavailable)
+
+            Button(action: {
                 Task {
                     await viewModel.refreshDevices()
                 }
@@ -98,10 +105,6 @@ struct ContentView: View {
             set: { id in
                 if let id = id {
                     viewModel.selectedDevice = viewModel.devices.first { $0.id == id }
-                    // Refresh devices list when selection changes
-                    Task {
-                        await viewModel.refreshDevices()
-                    }
                 } else {
                     viewModel.selectedDevice = nil
                 }
@@ -113,14 +116,11 @@ struct ContentView: View {
                 DeviceNameCell(device: device)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) {
-                        guard device.isBooted else { return }
-                        openWindow(id: "location-player", value: device.udid)
+                        openLocationPlayerWindow(for: device.udid)
                     }
                     .contextMenu {
-                        if device.isBooted {
-                            Button("Open Location Player") {
-                                openWindow(id: "location-player", value: device.udid)
-                            }
+                        Button("Open Location Player") {
+                            openLocationPlayerWindow(for: device.udid)
                         }
                     }
             }
@@ -158,6 +158,11 @@ struct ContentView: View {
             }
             isDeletingUnavailable = false
         }
+    }
+
+    @MainActor
+    private func openLocationPlayerWindow(for udid: String?) {
+        LocationPlayerWindowCoordinator.openWindowWithoutStealingFocus(for: udid, openWindow: openWindow)
     }
 }
 

@@ -1,9 +1,10 @@
 import Foundation
 
-enum GPXImportError: LocalizedError {
+enum GPXImportError: LocalizedError, Equatable {
     case unreadable
     case invalidFormat(String)
     case noRoutePoints
+    case noRoutePointsInSelection
 
     var errorDescription: String? {
         switch self {
@@ -13,12 +14,106 @@ enum GPXImportError: LocalizedError {
             return "Invalid GPX format: \(message)"
         case .noRoutePoints:
             return "No route points found. The GPX must contain at least two track/route points."
+        case .noRoutePointsInSelection:
+            return "No route points found in the selected time range."
         }
     }
 }
 
+struct GPXTimestampedPoint: Identifiable, Equatable {
+    let id: UUID
+    let point: GeoPoint
+    let timestamp: Date?
+
+    init(id: UUID = UUID(), point: GeoPoint, timestamp: Date?) {
+        self.id = id
+        self.point = point
+        self.timestamp = timestamp
+    }
+}
+
+struct GPXImportPreview: Equatable {
+    let name: String
+    let points: [GPXTimestampedPoint]
+
+    var totalPointCount: Int {
+        points.count
+    }
+
+    var timeRange: ClosedRange<Date>? {
+        let timestamps = points.compactMap(\.timestamp)
+        guard let minDate = timestamps.min(),
+              let maxDate = timestamps.max(),
+              minDate < maxDate else {
+            return nil
+        }
+        return minDate...maxDate
+    }
+
+    var canSelectTimeRange: Bool {
+        timeRange != nil
+    }
+
+    func points(in selectedTimeRange: ClosedRange<Date>) -> [GPXTimestampedPoint] {
+        points.filter { point in
+            guard let timestamp = point.timestamp else { return false }
+            return selectedTimeRange.contains(timestamp)
+        }
+    }
+
+    func points(in selectedPointRange: ClosedRange<Int>) -> [GPXTimestampedPoint] {
+        guard !points.isEmpty else { return [] }
+        let lowerBound = max(0, min(points.count - 1, selectedPointRange.lowerBound))
+        let upperBound = max(lowerBound, min(points.count - 1, selectedPointRange.upperBound))
+        return Array(points[lowerBound...upperBound])
+    }
+
+    func route() throws -> SavedRoute {
+        try route(selectedTimeRange: nil, selectedPointRange: nil)
+    }
+
+    func route(selectedTimeRange: ClosedRange<Date>) throws -> SavedRoute {
+        try route(selectedTimeRange: selectedTimeRange, selectedPointRange: nil)
+    }
+
+    func route(selectedPointRange: ClosedRange<Int>) throws -> SavedRoute {
+        try route(selectedTimeRange: nil, selectedPointRange: selectedPointRange)
+    }
+
+    func route(
+        selectedTimeRange: ClosedRange<Date>?,
+        selectedPointRange: ClosedRange<Int>?
+    ) throws -> SavedRoute {
+        let resolvedWaypoints: [GeoPoint]
+        if let selectedTimeRange {
+            resolvedWaypoints = points(in: selectedTimeRange).map(\.point)
+            guard resolvedWaypoints.count >= 2 else {
+                throw GPXImportError.noRoutePointsInSelection
+            }
+        } else if let selectedPointRange {
+            resolvedWaypoints = points(in: selectedPointRange).map(\.point)
+            guard resolvedWaypoints.count >= 2 else {
+                throw GPXImportError.noRoutePointsInSelection
+            }
+        } else {
+            resolvedWaypoints = points.map(\.point)
+        }
+
+        guard resolvedWaypoints.count >= 2 else {
+            throw GPXImportError.noRoutePoints
+        }
+
+        return SavedRoute(
+            name: name,
+            waypoints: resolvedWaypoints,
+            speedMetersPerSecond: 20,
+            updateMode: .interval(seconds: 1)
+        )
+    }
+}
+
 enum GPXRouteImporter {
-    static func importRoute(from fileURL: URL) throws -> SavedRoute {
+    static func preview(from fileURL: URL) throws -> GPXImportPreview {
         let data: Data
         do {
             data = try Data(contentsOf: fileURL)
@@ -26,10 +121,10 @@ enum GPXRouteImporter {
             throw GPXImportError.unreadable
         }
 
-        return try importRoute(from: data, fallbackName: fileURL.deletingPathExtension().lastPathComponent)
+        return try preview(from: data, fallbackName: fileURL.deletingPathExtension().lastPathComponent)
     }
 
-    static func importRoute(from data: Data, fallbackName: String) throws -> SavedRoute {
+    static func preview(from data: Data, fallbackName: String) throws -> GPXImportPreview {
         let parserDelegate = GPXParserDelegate()
         let parser = XMLParser(data: data)
         parser.delegate = parserDelegate
@@ -45,22 +140,43 @@ enum GPXRouteImporter {
 
         let routeName = parserDelegate.routeName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedName = (routeName?.isEmpty == false ? routeName! : fallbackName)
+        return GPXImportPreview(name: resolvedName, points: parserDelegate.points)
+    }
 
-        return SavedRoute(
-            name: resolvedName,
-            waypoints: parserDelegate.points,
-            speedMetersPerSecond: 20,
-            updateMode: .interval(seconds: 1)
-        )
+    static func importRoute(from fileURL: URL) throws -> SavedRoute {
+        try preview(from: fileURL).route()
+    }
+
+    static func importRoute(from data: Data, fallbackName: String) throws -> SavedRoute {
+        try preview(from: data, fallbackName: fallbackName).route()
     }
 }
 
 private final class GPXParserDelegate: NSObject, XMLParserDelegate {
-    private(set) var points: [GeoPoint] = []
+    private(set) var points: [GPXTimestampedPoint] = []
     private(set) var routeName: String?
 
     private var elementStack: [String] = []
     private var currentText = ""
+    private var currentPoint: ParsedPoint?
+
+    private let dateFormatterWithFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private let dateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private struct ParsedPoint {
+        var lat: Double
+        var lon: Double
+        var timestamp: Date?
+    }
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
         elementStack.append(elementName)
@@ -74,7 +190,7 @@ private final class GPXParserDelegate: NSObject, XMLParserDelegate {
                 return
             }
 
-            points.append(GeoPoint(lat: lat, lon: lon))
+            currentPoint = ParsedPoint(lat: lat, lon: lon, timestamp: nil)
         }
     }
 
@@ -86,6 +202,28 @@ private final class GPXParserDelegate: NSObject, XMLParserDelegate {
         defer {
             _ = elementStack.popLast()
             currentText = ""
+        }
+
+        if elementName == "time",
+           let parent = elementStack.dropLast().last,
+           (parent == "trkpt" || parent == "rtept"),
+           var currentPoint {
+            currentPoint.timestamp = parseDate(from: currentText)
+            self.currentPoint = currentPoint
+            return
+        }
+
+        if elementName == "trkpt" || elementName == "rtept" {
+            if let currentPoint {
+                points.append(
+                    GPXTimestampedPoint(
+                        point: GeoPoint(lat: currentPoint.lat, lon: currentPoint.lon),
+                        timestamp: currentPoint.timestamp
+                    )
+                )
+            }
+            currentPoint = nil
+            return
         }
 
         guard elementName == "name", routeName == nil else {
@@ -102,5 +240,14 @@ private final class GPXParserDelegate: NSObject, XMLParserDelegate {
         if !normalized.isEmpty {
             routeName = normalized
         }
+    }
+
+    private func parseDate(from rawValue: String) -> Date? {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        if let withFractional = dateFormatterWithFractionalSeconds.date(from: value) {
+            return withFractional
+        }
+        return dateFormatter.date(from: value)
     }
 }

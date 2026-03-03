@@ -6,6 +6,8 @@ final class LocationPlayerViewModel: ObservableObject {
     @Published var deviceName: String
     @Published var udid: String
     @Published var deviceState: DeviceState = .shutdown
+    @Published var availableDevices: [SimDevice] = []
+    @Published var autoBootOnSend: Bool = true
     @Published var locations: [SavedLocation] = []
     @Published var routes: [SavedRoute] = []
     @Published var selectedLocationID: UUID?
@@ -13,20 +15,23 @@ final class LocationPlayerViewModel: ObservableObject {
     @Published var defaultLocationID: UUID?
     @Published var playbackState: PlaybackState = .idle
     @Published var errorMessage: String?
+    @Published var debugLogText: String = ""
 
     private let service: SimctlLocationControlling
     private let libraryStore: LocationLibraryStore
     private var pollTask: Task<Void, Never>?
     private var loaded = false
+    private var debugLogObserver: NSObjectProtocol?
 
     init(
-        udid: String,
+        udid: String? = nil,
         initialDeviceName: String? = nil,
         service: SimctlLocationControlling,
         libraryStore: LocationLibraryStore
     ) {
-        self.udid = udid
-        self.deviceName = initialDeviceName ?? udid
+        let resolvedUDID = udid ?? ""
+        self.udid = resolvedUDID
+        self.deviceName = initialDeviceName ?? (resolvedUDID.isEmpty ? "No simulator selected" : resolvedUDID)
         self.service = service
         self.libraryStore = libraryStore
 
@@ -46,9 +51,21 @@ final class LocationPlayerViewModel: ObservableObject {
             self.selectedRouteID = nil
             self.errorMessage = error.localizedDescription
         }
+
+        debugLogText = RouteDebugLogStore.shared.snapshot()
+        debugLogObserver = NotificationCenter.default.addObserver(
+            forName: .routeDebugLogDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.debugLogText = RouteDebugLogStore.shared.snapshot()
+            }
+        }
+        logDebug("Initialized view model for udid=\(resolvedUDID.isEmpty ? "<none>" : resolvedUDID)")
     }
 
-    convenience init(udid: String, initialDeviceName: String? = nil) {
+    convenience init(udid: String? = nil, initialDeviceName: String? = nil) {
         self.init(
             udid: udid,
             initialDeviceName: initialDeviceName,
@@ -59,6 +76,13 @@ final class LocationPlayerViewModel: ObservableObject {
 
     deinit {
         pollTask?.cancel()
+        if let debugLogObserver {
+            NotificationCenter.default.removeObserver(debugLogObserver)
+        }
+    }
+
+    private func logDebug(_ message: String) {
+        RouteDebugLogStore.shared.log("LocationPlayerViewModel: \(message)")
     }
 
     var selectedLocationIndex: Int? {
@@ -73,6 +97,10 @@ final class LocationPlayerViewModel: ObservableObject {
 
     var isDeviceBooted: Bool {
         deviceState == .booted
+    }
+
+    var hasTargetDevice: Bool {
+        !udid.isEmpty
     }
 
     var canStopRoute: Bool {
@@ -96,6 +124,7 @@ final class LocationPlayerViewModel: ObservableObject {
     func start() {
         guard !loaded else { return }
         loaded = true
+        logDebug("start() called, beginning status polling for udid=\(udid)")
 
         pollTask?.cancel()
         pollTask = Task { [weak self] in
@@ -110,31 +139,115 @@ final class LocationPlayerViewModel: ObservableObject {
     }
 
     func handleWindowClose() {
+        logDebug("handleWindowClose() called for udid=\(udid)")
         Task { [weak self] in
-            guard let self else { return }
+            guard let self, self.hasTargetDevice else { return }
             await self.service.stopRoute(udid: self.udid)
+            self.logDebug("Window close stopRoute finished for udid=\(self.udid)")
         }
+    }
+
+    func selectTargetDevice(_ selectedUDID: String) {
+        guard !selectedUDID.isEmpty else { return }
+        guard udid != selectedUDID else { return }
+        logDebug("Switching target device from \(udid) to \(selectedUDID)")
+
+        udid = selectedUDID
+        if let selected = availableDevices.first(where: { $0.udid == selectedUDID }) {
+            deviceName = selected.name
+            deviceState = selected.state
+        }
+        playbackState = service.playbackState(udid: selectedUDID)
+        errorMessage = nil
     }
 
     func refreshDeviceStatus() async {
         do {
-            async let state = service.deviceBootState(udid: udid)
-            async let name = service.deviceName(udid: udid)
-            let resolvedState = try await state
-            let resolvedName = try await name
+            let response = try await service.fetchDeviceList()
+            var flattenedDevices: [SimDevice] = []
+            for deviceList in response.devices.values {
+                flattenedDevices.append(contentsOf: deviceList)
+            }
+            flattenedDevices.sort { lhs, rhs in
+                if lhs.isBooted != rhs.isBooted {
+                    return lhs.isBooted && !rhs.isBooted
+                }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            availableDevices = flattenedDevices
 
-            deviceState = resolvedState
-            deviceName = resolvedName
+            if udid.isEmpty || !flattenedDevices.contains(where: { $0.udid == udid }) {
+                if let fallback = flattenedDevices.first(where: { $0.isBooted }) ?? flattenedDevices.first {
+                    udid = fallback.udid
+                } else {
+                    udid = ""
+                    deviceName = "No simulator selected"
+                    deviceState = .shutdown
+                    playbackState = .idle
+                    return
+                }
+            }
+
+            guard let selected = flattenedDevices.first(where: { $0.udid == udid }) else {
+                deviceName = "No simulator selected"
+                deviceState = .shutdown
+                playbackState = .idle
+                return
+            }
+
+            deviceName = selected.name
+            deviceState = selected.state
             playbackState = service.playbackState(udid: udid)
 
-            if resolvedState != .booted, hasRunningSession {
+            if selected.state != .booted, hasRunningSession {
                 await service.stopRoute(udid: udid)
                 playbackState = service.playbackState(udid: udid)
                 errorMessage = "The simulator is no longer booted. Playback was stopped."
+                logDebug("Stopped playback because simulator is no longer booted (udid=\(udid))")
             }
         } catch {
             errorMessage = error.localizedDescription
+            logDebug("refreshDeviceStatus failed for udid=\(udid): \(error.localizedDescription)")
         }
+    }
+
+    private func ensureTargetDeviceBootedForSend() async throws {
+        logDebug("ensureTargetDeviceBootedForSend() start for udid=\(udid), isBooted=\(isDeviceBooted), autoBoot=\(autoBootOnSend)")
+        guard hasTargetDevice else {
+            throw SimctlError.commandFailed("Select a target simulator in the Location Player first.")
+        }
+
+        guard !isDeviceBooted else { return }
+
+        guard autoBootOnSend else {
+            throw SimctlError.commandFailed("Selected simulator is shutdown. Enable Auto-Boot or boot it manually.")
+        }
+
+        do {
+            try await service.bootDevice(udid: udid)
+            logDebug("bootDevice command sent for udid=\(udid)")
+        } catch {
+            // Boot may race with an already in-progress boot. Verify state before failing.
+            await refreshDeviceStatus()
+            if !isDeviceBooted {
+                logDebug("bootDevice failed and simulator is still not booted for udid=\(udid): \(error.localizedDescription)")
+                throw error
+            }
+            logDebug("bootDevice returned error but device is already booted for udid=\(udid)")
+        }
+
+        let bootDeadline = Date().addingTimeInterval(30)
+        while Date() < bootDeadline {
+            await refreshDeviceStatus()
+            if isDeviceBooted {
+                logDebug("Simulator boot confirmed for udid=\(udid)")
+                return
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+
+        logDebug("Boot timeout reached for udid=\(udid)")
+        throw SimctlError.commandFailed("Failed to boot selected simulator within timeout.")
     }
 
     func saveLibrary() {
@@ -260,6 +373,7 @@ final class LocationPlayerViewModel: ObservableObject {
     }
 
     func selectLocation(_ id: UUID?) {
+        logDebug("selectLocation(\(id?.uuidString ?? "nil"))")
         selectedLocationID = id
         if id != nil {
             selectedRouteID = nil
@@ -267,6 +381,7 @@ final class LocationPlayerViewModel: ObservableObject {
     }
 
     func selectRoute(_ id: UUID?) {
+        logDebug("selectRoute(\(id?.uuidString ?? "nil"))")
         selectedRouteID = id
         if id != nil {
             selectedLocationID = nil
@@ -337,6 +452,11 @@ final class LocationPlayerViewModel: ObservableObject {
     }
 
     func applySelectedLocation() {
+        guard hasTargetDevice else {
+            errorMessage = "Select a target simulator first."
+            return
+        }
+
         guard let index = selectedLocationIndex else {
             errorMessage = "Select a location first."
             return
@@ -347,15 +467,24 @@ final class LocationPlayerViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             do {
+                self.logDebug("applySelectedLocation() start for udid=\(self.udid), locationID=\(self.locations[index].id)")
+                try await self.ensureTargetDeviceBootedForSend()
                 try self.locations[index].validate()
                 try await self.service.setLocation(udid: self.udid, point: self.locations[index].point)
+                self.logDebug("applySelectedLocation() success for udid=\(self.udid), locationID=\(self.locations[index].id)")
             } catch {
                 self.errorMessage = error.localizedDescription
+                self.logDebug("applySelectedLocation() failed for udid=\(self.udid): \(error.localizedDescription)")
             }
         }
     }
 
     func playSelectedRoute() {
+        guard hasTargetDevice else {
+            errorMessage = "Select a target simulator first."
+            return
+        }
+
         guard let index = selectedRouteIndex else {
             errorMessage = "Select a route first."
             return
@@ -366,17 +495,32 @@ final class LocationPlayerViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             do {
+                self.logDebug(
+                    """
+                    playSelectedRoute() start for udid=\(self.udid), routeID=\(self.routes[index].id), \
+                    waypoints=\(self.routes[index].waypoints.count), mode=\(self.routes[index].updateMode)
+                    """
+                )
+                try await self.ensureTargetDeviceBootedForSend()
                 try self.routes[index].validate()
+                self.playbackState = .running(routeID: self.routes[index].id)
                 try await self.service.startRoute(udid: self.udid, route: self.routes[index])
                 self.playbackState = self.service.playbackState(udid: self.udid)
+                self.logDebug("playSelectedRoute() command accepted; playbackState=\(self.playbackState)")
             } catch {
                 self.errorMessage = error.localizedDescription
                 self.playbackState = .failed(message: error.localizedDescription)
+                self.logDebug("playSelectedRoute() failed: \(error.localizedDescription)")
             }
         }
     }
 
     func importRoute(from fileURL: URL) {
+        guard let preview = prepareGPXImport(from: fileURL) else { return }
+        importRoute(from: preview)
+    }
+
+    func prepareGPXImport(from fileURL: URL) -> GPXImportPreview? {
         errorMessage = nil
 
         let hasSecurityScope = fileURL.startAccessingSecurityScopedResource()
@@ -387,7 +531,25 @@ final class LocationPlayerViewModel: ObservableObject {
         }
 
         do {
-            let route = try GPXRouteImporter.importRoute(from: fileURL)
+            return try GPXRouteImporter.preview(from: fileURL)
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func importRoute(
+        from preview: GPXImportPreview,
+        selectedTimeRange: ClosedRange<Date>? = nil,
+        selectedPointRange: ClosedRange<Int>? = nil
+    ) {
+        errorMessage = nil
+
+        do {
+            let route = try preview.route(
+                selectedTimeRange: selectedTimeRange,
+                selectedPointRange: selectedPointRange
+            )
             routes.append(route)
             selectRoute(route.id)
             saveLibrary()
@@ -414,6 +576,11 @@ final class LocationPlayerViewModel: ObservableObject {
     }
 
     func resetToDefaultLocation() {
+        guard hasTargetDevice else {
+            errorMessage = "Select a target simulator first."
+            return
+        }
+
         guard let defaultLocationID,
               let location = locations.first(where: { $0.id == defaultLocationID }) else {
             errorMessage = "No default location configured."
@@ -424,6 +591,7 @@ final class LocationPlayerViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             do {
+                try await self.ensureTargetDeviceBootedForSend()
                 try location.validate()
                 try await self.service.setLocation(udid: self.udid, point: location.point)
             } catch {
@@ -432,11 +600,37 @@ final class LocationPlayerViewModel: ObservableObject {
         }
     }
 
+    func clearAppliedLocation() {
+        guard hasTargetDevice else {
+            errorMessage = "Select a target simulator first."
+            return
+        }
+
+        errorMessage = nil
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.ensureTargetDeviceBootedForSend()
+                try await self.service.clearLocation(udid: self.udid)
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     func togglePauseResume() {
         errorMessage = nil
+        guard hasTargetDevice else {
+            errorMessage = "Select a target simulator first."
+            return
+        }
+
+        let currentState = service.playbackState(udid: udid)
+        playbackState = currentState
+        logDebug("togglePauseResume() called for udid=\(udid), currentState=\(currentState)")
 
         do {
-            switch playbackState {
+            switch currentState {
             case .running:
                 try service.pauseRoute(udid: udid)
             case .paused:
@@ -445,18 +639,48 @@ final class LocationPlayerViewModel: ObservableObject {
                 errorMessage = "No active route to pause or resume."
             }
             playbackState = service.playbackState(udid: udid)
+            logDebug("togglePauseResume() success for udid=\(udid), newState=\(playbackState)")
         } catch {
             errorMessage = error.localizedDescription
+            logDebug("togglePauseResume() failed for udid=\(udid): \(error.localizedDescription)")
         }
     }
 
     func stop() {
         errorMessage = nil
+        guard hasTargetDevice else {
+            errorMessage = "Select a target simulator first."
+            return
+        }
 
         Task { [weak self] in
             guard let self else { return }
+            self.logDebug("stop() requested for udid=\(self.udid)")
             await self.service.stopRoute(udid: self.udid)
             self.playbackState = self.service.playbackState(udid: self.udid)
+            self.logDebug("stop() finished for udid=\(self.udid), newState=\(self.playbackState)")
         }
+    }
+
+    var debugLogLineCount: Int {
+        guard !debugLogText.isEmpty else { return 0 }
+        return debugLogText.split(separator: "\n", omittingEmptySubsequences: false).count
+    }
+
+    var debugLogShareText: String {
+        let header = "SimctlHelperUI Debug Log\nDevice: \(deviceName)\nUDID: \(udid)\n-----\n"
+        if debugLogText.isEmpty {
+            return "\(header)(empty)"
+        }
+        return "\(header)\(debugLogText)"
+    }
+
+    func clearDebugLog() {
+        RouteDebugLogStore.shared.clear()
+        logDebug("Debug log cleared by user")
+    }
+
+    func refreshDebugLog() {
+        debugLogText = RouteDebugLogStore.shared.snapshot()
     }
 }
