@@ -48,7 +48,7 @@ struct LocationPlayerView: View {
     }
 
     private let inlineWaypointEditingLimit = 20
-    private let mapWaypointEditingLimit = 1_500
+    private let mapWaypointEditingLimit = 3_000
 
     var body: some View {
         VStack(spacing: 0) {
@@ -432,7 +432,11 @@ struct LocationPlayerView: View {
     }
 
     private func locationDetails(location: SavedLocation) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let previewPoint = locationDraft?.point ?? location.point
+        let previewName = locationDraft?.name ?? location.name
+        let previewLocationID = locationDraft?.id ?? location.id
+
+        return VStack(alignment: .leading, spacing: 12) {
             Text("Location Details")
                 .font(.headline)
 
@@ -461,6 +465,28 @@ struct LocationPlayerView: View {
 
             Button("Edit On Map") {
                 openLocationEditMapPicker(location)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Preview")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+
+                LocationPreviewMap(locationID: previewLocationID, point: previewPoint, title: previewName)
+                    .frame(minHeight: 360)
+
+                Text(
+                    String(
+                        format: "Lat %.6f, Lon %.6f",
+                        locale: Locale(identifier: "en_US_POSIX"),
+                        previewPoint.lat,
+                        previewPoint.lon
+                    )
+                )
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.secondary)
             }
         }
         .padding()
@@ -969,6 +995,56 @@ struct LocationPlayerView: View {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         return "location-library-\(formatter.string(from: Date()))"
+    }
+}
+
+private struct LocationPreviewMap: View {
+    let locationID: UUID
+    let point: GeoPoint
+    let title: String
+
+    @State private var cameraPosition: MapCameraPosition
+
+    init(locationID: UUID, point: GeoPoint, title: String) {
+        self.locationID = locationID
+        self.point = point
+        self.title = title
+        _cameraPosition = State(initialValue: .region(Self.region(for: point)))
+    }
+
+    var body: some View {
+        Map(position: $cameraPosition, interactionModes: [.zoom, .pan]) {
+            Marker(resolvedTitle, coordinate: coordinate)
+                .tint(.red)
+        }
+        .id(mapIdentity)
+        .mapStyle(.hybrid(elevation: .realistic))
+        .task(id: mapIdentity) {
+            cameraPosition = .region(Self.region(for: point))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon)
+    }
+
+    private var resolvedTitle: String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Selected Location" : trimmed
+    }
+
+    private var mapIdentity: String {
+        let lat = String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), point.lat)
+        let lon = String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), point.lon)
+        return "\(locationID.uuidString)-\(lat)-\(lon)"
+    }
+
+    private static func region(for point: GeoPoint) -> MKCoordinateRegion {
+        return MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon),
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
     }
 }
 
