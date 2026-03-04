@@ -8,6 +8,8 @@
 import SwiftUI
 
 struct ContentView: View {
+    private static let backgroundRefreshIntervalNanoseconds: UInt64 = 10_000_000_000 // 10 seconds
+
     @Environment(\.openWindow) private var openWindow
     @StateObject private var viewModel = DeviceListViewModel()
     @State private var showDeleteUnavailableConfirmation = false
@@ -19,6 +21,12 @@ struct ContentView: View {
             actionsPanel
         }
         .frame(minWidth: 900, minHeight: 600)
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.backgroundRefreshIntervalNanoseconds)
+                await viewModel.refreshDevicesInBackground()
+            }
+        }
         .alert("Delete Unavailable Simulators", isPresented: $showDeleteUnavailableConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Delete All", role: .destructive) {

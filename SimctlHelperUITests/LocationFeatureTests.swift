@@ -361,7 +361,7 @@ final class LocationFeatureTests: XCTestCase {
         try store.save(LocationLibrary(locations: [location], routes: [route], defaultLocationID: location.id))
 
         let viewModel = LocationPlayerViewModel(
-            service: UnusedSimctlService(),
+            service: UnusedSimctlService.shared,
             libraryStore: store
         )
 
@@ -402,7 +402,7 @@ final class LocationFeatureTests: XCTestCase {
         try store.save(LocationLibrary(locations: [location], routes: [route], defaultLocationID: location.id))
 
         let viewModel = LocationPlayerViewModel(
-            service: UnusedSimctlService(),
+            service: UnusedSimctlService.shared,
             libraryStore: store
         )
 
@@ -418,6 +418,10 @@ final class LocationFeatureTests: XCTestCase {
 }
 
 private final class UnusedSimctlService: SimctlLocationControlling {
+    static let shared = UnusedSimctlService()
+
+    private init() {}
+
     func fetchDeviceList() async throws -> SimctlListResponse {
         fatalError("Unused in these tests")
     }

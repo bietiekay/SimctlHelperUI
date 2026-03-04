@@ -39,9 +39,10 @@ The Location Player opens in its own window and is bound to a single simulator U
 - The app opens a dedicated main window (`Device Overview`) on launch.
 - The `Device Overview` window is no longer forced to the foreground when assigning/opening Location Player windows.
 - Opening/focusing a Location Player window no longer restores focus back to the previously active window.
+- The `Device Overview` device list refreshes automatically in the background every 10 seconds (non-blocking UI refresh).
 - Location Player performs a one-time device status refresh on open.
 - Continuous background polling (every few seconds) is currently disabled.
-- Use `Refresh` in the main `Device Overview` toolbar when you want to refresh the simulator list.
+- `Refresh` in the main `Device Overview` toolbar is still available for immediate manual refresh.
 
 ### Location Features
 
@@ -162,11 +163,13 @@ The app follows MVVM.
 - Removed automatic main-window foreground stealing when Location Player windows are created/updated.
 - Reworked main device table open behavior to use table primary action (double-click) instead of per-cell gestures, improving row selection reliability.
 - Simplified window focus coordination so main window and Location Player do not fight for key focus after opening/focusing player windows.
+- Added non-blocking periodic background refresh for the main device list (10-second interval), while keeping manual refresh support.
 - Disabled periodic device polling in Location Player (one-time refresh on open; manual refresh via main window).
 - Added app-menu import/export commands for location/route data (File menu), wired to the existing import/export flows.
 - Added menu fallback handling so import/export can be triggered even when no Location Player window is open.
 - Added explicit `Quit SimctlHelperUI` menu entry and configured app termination when the last window closes.
 - Reworked single-location preview map rendering to update pin placement reliably when switching selected locations.
+- Fixed a teardown stability issue in tests/preview lifecycle around `LocationPlayerViewModel` observer updates and test service deallocation.
 
 ## License
 

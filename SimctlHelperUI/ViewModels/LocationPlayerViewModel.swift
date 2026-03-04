@@ -51,14 +51,14 @@ final class LocationPlayerViewModel: ObservableObject {
             self.errorMessage = error.localizedDescription
         }
 
-        debugLogText = RouteDebugLogStore.shared.snapshot()
+        updateDebugLogText()
         debugLogObserver = NotificationCenter.default.addObserver(
             forName: .routeDebugLogDidChange,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.debugLogText = RouteDebugLogStore.shared.snapshot()
+            MainActor.assumeIsolated {
+                self?.updateDebugLogText()
             }
         }
         logDebug("Initialized view model for udid=\(resolvedUDID.isEmpty ? "<none>" : resolvedUDID)")
@@ -81,6 +81,10 @@ final class LocationPlayerViewModel: ObservableObject {
 
     private func logDebug(_ message: String) {
         RouteDebugLogStore.shared.log("LocationPlayerViewModel: \(message)")
+    }
+
+    private func updateDebugLogText() {
+        debugLogText = RouteDebugLogStore.shared.snapshot()
     }
 
     var selectedLocationIndex: Int? {

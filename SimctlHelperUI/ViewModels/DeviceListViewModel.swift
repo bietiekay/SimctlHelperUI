@@ -45,6 +45,7 @@ class DeviceListViewModel: ObservableObject {
     private let service = SimctlService.shared
     private var runtimes: [String: SimRuntime] = [:]
     private var deviceTypes: [String: SimDeviceType] = [:]
+    private var isRefreshing = false
     
     init() {
         Task {
@@ -54,58 +55,70 @@ class DeviceListViewModel: ObservableObject {
     
     // MARK: - Load Devices
     
-    func loadDevices() async {
-        isLoading = true
-        errorMessage = nil
-        
-        // Preserve selected device UDID before refresh
-        let selectedUdid = selectedDevice?.udid
-        
-        do {
-            let response = try await service.fetchDeviceList()
-            
-            // Store runtimes and device types for lookup
-            runtimes = Dictionary(uniqueKeysWithValues: response.runtimes.map { ($0.identifier, $0) })
-            deviceTypes = Dictionary(uniqueKeysWithValues: response.devicetypes.map { ($0.identifier, $0) })
-            
-            // Flatten devices and enrich with runtime info
-            var flattenedDevices: [SimDevice] = []
-            for (runtimeId, deviceList) in response.devices {
-                for var device in deviceList {
-                    device.runtimeIdentifier = runtimeId
-                    flattenedDevices.append(device)
-                }
-            }
-            
-            devices = flattenedDevices
-            applySorting()
-            
-            // Restore selection after refresh if device still exists
-            if let selectedUdid = selectedUdid {
-                selectedDevice = devices.first { $0.udid == selectedUdid }
-            }
-            
-        } catch {
-            errorMessage = error.localizedDescription
+    func loadDevices(showLoadingIndicator: Bool = true, clearErrorMessage: Bool = true) async {
+        await waitForOngoingRefresh()
+        isRefreshing = true
+
+        if showLoadingIndicator {
+            isLoading = true
         }
-        
-        isLoading = false
+        if clearErrorMessage {
+            errorMessage = nil
+        }
+
+        let selectedUdid = selectedDevice?.udid
+
+        defer {
+            isRefreshing = false
+            if showLoadingIndicator {
+                isLoading = false
+            }
+        }
+
+        do {
+            try await fetchAndApplyDevices(selectedUdid: selectedUdid)
+            errorMessage = nil
+        } catch {
+            if clearErrorMessage || devices.isEmpty {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
     
     func refreshDevices() async {
         await loadDevices()
     }
+
+    func refreshDevicesInBackground() async {
+        await loadDevices(showLoadingIndicator: false, clearErrorMessage: false)
+    }
     
     private func refreshDevicesThrowing() async throws {
+        await waitForOngoingRefresh()
+        isRefreshing = true
+
+        let selectedUdid = selectedDevice?.udid
+        defer {
+            isRefreshing = false
+        }
+
+        try await fetchAndApplyDevices(selectedUdid: selectedUdid)
+        errorMessage = nil
+    }
+
+    private func waitForOngoingRefresh() async {
+        while isRefreshing {
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        }
+    }
+
+    private func fetchAndApplyDevices(selectedUdid: String?) async throws {
         let response = try await service.fetchDeviceList()
-        
+
         // Store runtimes and device types for lookup
         runtimes = Dictionary(uniqueKeysWithValues: response.runtimes.map { ($0.identifier, $0) })
         deviceTypes = Dictionary(uniqueKeysWithValues: response.devicetypes.map { ($0.identifier, $0) })
-        
-        // Preserve selected device UDID before refresh
-        let selectedUdid = selectedDevice?.udid
-        
+
         // Flatten devices and enrich with runtime info
         var flattenedDevices: [SimDevice] = []
         for (runtimeId, deviceList) in response.devices {
@@ -114,10 +127,10 @@ class DeviceListViewModel: ObservableObject {
                 flattenedDevices.append(device)
             }
         }
-        
+
         devices = flattenedDevices
         applySorting()
-        
+
         // Restore selection after refresh if device still exists
         if let selectedUdid = selectedUdid {
             selectedDevice = devices.first { $0.udid == selectedUdid }
