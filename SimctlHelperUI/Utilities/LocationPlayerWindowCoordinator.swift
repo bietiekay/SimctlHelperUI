@@ -48,6 +48,10 @@ enum LocationPlayerWindowCoordinator {
         assignIdentifier(to: window, udid: newUDID)
     }
 
+    static func windowIdentifierRawValue(for udid: String?) -> String {
+        windowIdentifier(for: udid).rawValue
+    }
+
     private static func windowIdentifier(for udid: String?) -> NSUserInterfaceItemIdentifier {
         let resolvedUDID = (udid ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return NSUserInterfaceItemIdentifier(identifierPrefix + resolvedUDID)

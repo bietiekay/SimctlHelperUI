@@ -73,6 +73,13 @@ The Location Player opens in its own window and is bound to a single simulator U
 
 - `Export All` writes the full location/route library to one JSON file.
 - `Import...` reads a JSON library file and opens a selection sheet.
+- The app menu (`File`) also provides:
+  - `Import GPX Route...`
+  - `Import Location/Route Library...`
+  - `Export Location/Route Library...`
+- These menu actions also work when no Location Player window is currently open:
+  - A neutral Location Player window is opened/focused automatically
+  - The requested import/export flow is then started
 - In the selection sheet you can:
   - Select all/none for locations
   - Select all/none for routes
@@ -154,6 +161,10 @@ The app follows MVVM.
 - Reworked main device table open behavior to use table primary action (double-click) instead of per-cell gestures, improving row selection reliability.
 - Simplified window focus coordination so main window and Location Player do not fight for key focus after opening/focusing player windows.
 - Disabled periodic device polling in Location Player (one-time refresh on open; manual refresh via main window).
+- Added app-menu import/export commands for location/route data (File menu), wired to the existing import/export flows.
+- Added menu fallback handling so import/export can be triggered even when no Location Player window is open.
+- Added explicit `Quit SimctlHelperUI` menu entry and configured app termination when the last window closes.
+- Reworked single-location preview map rendering to update pin placement reliably when switching selected locations.
 
 ## License
 

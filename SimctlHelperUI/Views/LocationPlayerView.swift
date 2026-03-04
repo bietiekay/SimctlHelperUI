@@ -34,6 +34,7 @@ struct LocationPlayerView: View {
     @State private var pendingLocationSaveTask: Task<Void, Never>?
     @State private var pendingRouteSaveTask: Task<Void, Never>?
     @State private var isDebugLogExpanded = false
+    @State private var locationPlayerWindowIdentifier: String?
 
     private var allowedImportContentTypes: [UTType] {
         switch activeFileImportKind {
@@ -68,13 +69,31 @@ struct LocationPlayerView: View {
             playbackControls
         }
         .navigationTitle("Location Player - \(viewModel.deviceName)")
+        .background(
+            WindowObserverView { window in
+                locationPlayerWindowIdentifier = window.identifier?.rawValue
+                processPendingMenuCommand()
+            }
+        )
+        .focusedSceneValue(
+            \.locationPlayerMenuActions,
+            LocationPlayerMenuActions(
+                importGPXRoute: { beginGPXRouteImport() },
+                importLibraryJSON: { beginLibraryImport() },
+                exportLibraryJSON: { beginLibraryExport() }
+            )
+        )
         .onAppear {
             viewModel.start()
             ensureSelectionForCurrentMode()
             syncSelectionFromViewModel()
+            processPendingMenuCommand()
         }
         .onDisappear {
             viewModel.handleWindowClose()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .locationPlayerMenuCommandQueued)) { _ in
+            processPendingMenuCommand()
         }
         .onChange(of: selectedLocationID) { _, value in
             guard !isSyncingSelection else { return }
@@ -380,8 +399,7 @@ struct LocationPlayerView: View {
                             }
                             .disabled(viewModel.selectedRouteID == nil)
                             Button("Import GPX") {
-                                activeFileImportKind = .gpx
-                                isFileImporterPresented = true
+                                beginGPXRouteImport()
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -395,8 +413,7 @@ struct LocationPlayerView: View {
                         beginLibraryExport()
                     }
                     Button("Import...") {
-                        activeFileImportKind = .library
-                        isFileImporterPresented = true
+                        beginLibraryImport()
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -476,6 +493,7 @@ struct LocationPlayerView: View {
 
                 LocationPreviewMap(locationID: previewLocationID, point: previewPoint, title: previewName)
                     .frame(minHeight: 360)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
 
                 Text(
                     String(
@@ -966,10 +984,37 @@ struct LocationPlayerView: View {
         pasteboard.setString(viewModel.debugLogShareText, forType: .string)
     }
 
+    private func beginGPXRouteImport() {
+        activeFileImportKind = .gpx
+        isFileImporterPresented = true
+    }
+
+    private func beginLibraryImport() {
+        activeFileImportKind = .library
+        isFileImporterPresented = true
+    }
+
     private func beginLibraryExport() {
         guard let data = viewModel.exportLibraryData() else { return }
         libraryExportDocument = LocationLibraryDocument(data: data)
         showLibraryExporter = true
+    }
+
+    private func processPendingMenuCommand() {
+        guard let command = LocationPlayerMenuCommandCenter.shared.consumeCommand(
+            for: locationPlayerWindowIdentifier
+        ) else {
+            return
+        }
+
+        switch command {
+        case .importGPXRoute:
+            beginGPXRouteImport()
+        case .importLibraryJSON:
+            beginLibraryImport()
+        case .exportLibraryJSON:
+            beginLibraryExport()
+        }
     }
 
     private func beginRenameSelectedLocation() {
@@ -998,35 +1043,75 @@ struct LocationPlayerView: View {
     }
 }
 
-private struct LocationPreviewMap: View {
+private struct LocationPreviewMap: NSViewRepresentable {
     let locationID: UUID
     let point: GeoPoint
     let title: String
 
-    @State private var cameraPosition: MapCameraPosition
-
-    init(locationID: UUID, point: GeoPoint, title: String) {
-        self.locationID = locationID
-        self.point = point
-        self.title = title
-        _cameraPosition = State(initialValue: .region(Self.region(for: point)))
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
     }
 
-    var body: some View {
-        Map(position: $cameraPosition, interactionModes: [.zoom, .pan]) {
-            Marker(resolvedTitle, coordinate: coordinate)
-                .tint(.red)
-        }
-        .id(mapIdentity)
-        .mapStyle(.hybrid(elevation: .realistic))
-        .task(id: mapIdentity) {
-            cameraPosition = .region(Self.region(for: point))
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+    func makeNSView(context: Context) -> MKMapView {
+        let mapView = MKMapView(frame: .zero)
+        mapView.mapType = .hybrid
+        mapView.showsCompass = true
+        mapView.showsScale = false
+        mapView.showsZoomControls = true
+        mapView.register(MKMarkerAnnotationView.self, forAnnotationViewWithReuseIdentifier: Coordinator.annotationReuseIdentifier)
+        mapView.delegate = context.coordinator
+        return mapView
     }
 
-    private var coordinate: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon)
+    func updateNSView(_ mapView: MKMapView, context: Context) {
+        let coordinate = CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon)
+        let markerTitle = resolvedTitle
+        let previewKey = Self.previewKey(locationID: locationID, point: point)
+
+        let annotation: MKPointAnnotation
+        if let existingAnnotation = context.coordinator.annotation {
+            annotation = existingAnnotation
+        } else {
+            let newAnnotation = MKPointAnnotation()
+            context.coordinator.annotation = newAnnotation
+            mapView.addAnnotation(newAnnotation)
+            annotation = newAnnotation
+        }
+
+        if annotation.title != markerTitle {
+            annotation.title = markerTitle
+        }
+
+        if annotation.coordinate.latitude != coordinate.latitude
+            || annotation.coordinate.longitude != coordinate.longitude {
+            annotation.coordinate = coordinate
+        }
+
+        if context.coordinator.lastPreviewKey != previewKey {
+            mapView.setRegion(Self.region(for: point), animated: false)
+            context.coordinator.lastPreviewKey = previewKey
+        }
+    }
+
+    final class Coordinator: NSObject, MKMapViewDelegate {
+        static let annotationReuseIdentifier = "LocationPreviewPin"
+
+        var annotation: MKPointAnnotation?
+        var lastPreviewKey: String?
+
+        func mapView(
+            _ mapView: MKMapView,
+            viewFor annotation: MKAnnotation
+        ) -> MKAnnotationView? {
+            guard !(annotation is MKUserLocation) else { return nil }
+            let view = mapView.dequeueReusableAnnotationView(
+                withIdentifier: Self.annotationReuseIdentifier,
+                for: annotation
+            ) as? MKMarkerAnnotationView
+            view?.markerTintColor = .systemRed
+            view?.glyphImage = NSImage(systemSymbolName: "mappin", accessibilityDescription: nil)
+            return view
+        }
     }
 
     private var resolvedTitle: String {
@@ -1034,14 +1119,14 @@ private struct LocationPreviewMap: View {
         return trimmed.isEmpty ? "Selected Location" : trimmed
     }
 
-    private var mapIdentity: String {
+    private static func previewKey(locationID: UUID, point: GeoPoint) -> String {
         let lat = String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), point.lat)
         let lon = String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), point.lon)
         return "\(locationID.uuidString)-\(lat)-\(lon)"
     }
 
     private static func region(for point: GeoPoint) -> MKCoordinateRegion {
-        return MKCoordinateRegion(
+        MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon),
             span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
         )
