@@ -36,6 +36,7 @@ The Location Player opens in its own window and is bound to a single simulator U
 
 - The app opens a dedicated main window (`Device Overview`) on launch.
 - The `Device Overview` window is no longer forced to the foreground when assigning/opening Location Player windows.
+- Opening/focusing a Location Player window no longer restores focus back to the previously active window.
 - Location Player performs a one-time device status refresh on open.
 - Continuous background polling (every few seconds) is currently disabled.
 - Use `Refresh` in the main `Device Overview` toolbar when you want to refresh the simulator list.
@@ -107,7 +108,7 @@ The Location Player opens in its own window and is bound to a single simulator U
 3. Use the right action panel for clone/boot/shutdown/delete.
 4. Open Location Player for booted devices:
    - context menu, or
-   - double-click on row, or
+   - double-click on a selected row (table primary action), or
    - action panel button.
 5. In Location Player:
    - manage locations/routes,
@@ -150,6 +151,8 @@ The app follows MVVM.
 - Fixed long-route playback control so `Pause/Resume` remains usable when `simctl` hands route execution to external processes.
 - Changed app startup/main-scene handling to open `Device Overview` as the primary window.
 - Removed automatic main-window foreground stealing when Location Player windows are created/updated.
+- Reworked main device table open behavior to use table primary action (double-click) instead of per-cell gestures, improving row selection reliability.
+- Simplified window focus coordination so main window and Location Player do not fight for key focus after opening/focusing player windows.
 - Disabled periodic device polling in Location Player (one-time refresh on open; manual refresh via main window).
 
 ## License

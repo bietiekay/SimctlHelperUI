@@ -16,15 +16,12 @@ enum LocationPlayerWindowCoordinator {
         if window.isMiniaturized {
             window.deminiaturize(nil)
         }
-        window.orderFront(nil)
+        window.makeKeyAndOrderFront(nil)
         return true
     }
 
-    static func openWindowWithoutStealingFocus(for udid: String?, openWindow: OpenWindowAction) {
-        let previousKeyWindow = NSApp.keyWindow
-
+    static func openOrFocusWindow(for udid: String?, openWindow: OpenWindowAction) {
         if focusWindow(for: udid) {
-            restoreFocus(to: previousKeyWindow)
             return
         }
 
@@ -33,8 +30,6 @@ enum LocationPlayerWindowCoordinator {
         } else {
             openWindow(id: windowGroupID)
         }
-
-        restoreFocus(to: previousKeyWindow)
     }
 
     static func assignMainWindowIdentifier(to window: NSWindow) {
@@ -51,13 +46,6 @@ enum LocationPlayerWindowCoordinator {
             return
         }
         assignIdentifier(to: window, udid: newUDID)
-    }
-
-    private static func restoreFocus(to window: NSWindow?) {
-        guard let window, window.isVisible else { return }
-        DispatchQueue.main.async {
-            window.makeKeyAndOrderFront(nil)
-        }
     }
 
     private static func windowIdentifier(for udid: String?) -> NSUserInterfaceItemIdentifier {

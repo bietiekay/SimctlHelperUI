@@ -161,7 +161,7 @@ struct DeviceActionsView: View {
 
     @MainActor
     private func openLocationPlayerWindow(for udid: String?) {
-        LocationPlayerWindowCoordinator.openWindowWithoutStealingFocus(for: udid, openWindow: openWindow)
+        LocationPlayerWindowCoordinator.openOrFocusWindow(for: udid, openWindow: openWindow)
     }
 }
 

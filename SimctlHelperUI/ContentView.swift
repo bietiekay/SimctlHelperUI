@@ -110,19 +110,10 @@ struct ContentView: View {
                 }
             }
         )
-        
+
         return Table(viewModel.devices, selection: selectionBinding) {
             TableColumn("Name") { device in
                 DeviceNameCell(device: device)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        openLocationPlayerWindow(for: device.udid)
-                    }
-                    .contextMenu {
-                        Button("Open Location Player") {
-                            openLocationPlayerWindow(for: device.udid)
-                        }
-                    }
             }
             .width(min: 200, ideal: 250)
             TableColumn("State") { device in
@@ -137,6 +128,20 @@ struct ContentView: View {
             TableColumn("Runtime") { device in
                 Text(viewModel.runtimeVersion(for: device))
             }
+        }
+        .contextMenu(forSelectionType: SimDevice.ID.self) { selectedIDs in
+            if let selectedID = selectedIDs.first,
+               let device = viewModel.devices.first(where: { $0.id == selectedID }) {
+                Button("Open Location Player") {
+                    openLocationPlayerWindow(for: device.udid)
+                }
+            }
+        } primaryAction: { selectedIDs in
+            guard let selectedID = selectedIDs.first,
+                  let device = viewModel.devices.first(where: { $0.id == selectedID }) else {
+                return
+            }
+            openLocationPlayerWindow(for: device.udid)
         }
     }
     
@@ -162,7 +167,7 @@ struct ContentView: View {
 
     @MainActor
     private func openLocationPlayerWindow(for udid: String?) {
-        LocationPlayerWindowCoordinator.openWindowWithoutStealingFocus(for: udid, openWindow: openWindow)
+        LocationPlayerWindowCoordinator.openOrFocusWindow(for: udid, openWindow: openWindow)
     }
 }
 
