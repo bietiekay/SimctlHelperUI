@@ -20,20 +20,20 @@ struct ContentView: View {
             deviceListView
             actionsPanel
         }
-        .frame(minWidth: 900, minHeight: 600)
+        .frame(minWidth: 940, minHeight: 620)
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: Self.backgroundRefreshIntervalNanoseconds)
                 await viewModel.refreshDevicesInBackground()
             }
         }
-        .alert("Delete Unavailable Simulators", isPresented: $showDeleteUnavailableConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete All", role: .destructive) {
+        .alert(L10n.t("Delete Unavailable Simulators"), isPresented: $showDeleteUnavailableConfirmation) {
+            Button(L10n.t("Cancel"), role: .cancel) {}
+            Button(L10n.t("Delete All"), role: .destructive) {
                 deleteUnavailableDevices()
             }
         } message: {
-            Text("This removes all unavailable simulators from the current list.")
+            Text(L10n.t("This removes all unavailable simulators from the current list."))
         }
     }
     
@@ -46,11 +46,11 @@ struct ContentView: View {
     }
     
     private var toolbarView: some View {
-        HStack {
+        HStack(spacing: 12) {
             Button(action: {
                 openLocationPlayerWindow(for: nil)
             }) {
-                Label("Location Player", systemImage: "location")
+                Label(L10n.t("Location Player"), systemImage: "location")
             }
             .disabled(viewModel.isLoading || isDeletingUnavailable)
 
@@ -59,7 +59,7 @@ struct ContentView: View {
                     await viewModel.refreshDevices()
                 }
             }) {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                Label(L10n.t("Refresh"), systemImage: "arrow.clockwise")
             }
             .disabled(viewModel.isLoading || isDeletingUnavailable)
             
@@ -67,7 +67,7 @@ struct ContentView: View {
                 Button(role: .destructive, action: {
                     showDeleteUnavailableConfirmation = true
                 }) {
-                    Label("Delete Unavailable", systemImage: "trash.slash")
+                    Label(L10n.t("Delete Unavailable"), systemImage: "trash.slash")
                 }
                 .disabled(viewModel.isLoading || isDeletingUnavailable)
             }
@@ -86,7 +86,7 @@ struct ContentView: View {
                     .font(.caption)
             }
         }
-        .padding()
+        .padding(12)
         .background(Color(NSColor.controlBackgroundColor))
     }
     
@@ -100,8 +100,8 @@ struct ContentView: View {
     }
     
     private var emptyStateView: some View {
-        VStack {
-            Text("No devices found")
+        VStack(spacing: 8) {
+            Text(L10n.t("No devices found"))
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -120,27 +120,27 @@ struct ContentView: View {
         )
 
         return Table(viewModel.devices, selection: selectionBinding) {
-            TableColumn("Name") { device in
+            TableColumn(L10n.t("Name")) { device in
                 DeviceNameCell(device: device)
             }
             .width(min: 200, ideal: 250)
-            TableColumn("State") { device in
+            TableColumn(L10n.t("State")) { device in
                 DeviceStateCell(device: device)
             }
-            TableColumn("Availability") { device in
+            TableColumn(L10n.t("Availability")) { device in
                 DeviceAvailabilityCell(device: device)
             }
-            TableColumn("Device Type") { device in
+            TableColumn(L10n.t("Device Type")) { device in
                 Text(viewModel.deviceTypeName(for: device))
             }
-            TableColumn("Runtime") { device in
+            TableColumn(L10n.t("Runtime")) { device in
                 Text(viewModel.runtimeVersion(for: device))
             }
         }
         .contextMenu(forSelectionType: SimDevice.ID.self) { selectedIDs in
             if let selectedID = selectedIDs.first,
                let device = viewModel.devices.first(where: { $0.id == selectedID }) {
-                Button("Open Location Player") {
+                Button(L10n.t("Open Location Player")) {
                     openLocationPlayerWindow(for: device.udid)
                 }
             }
@@ -155,7 +155,7 @@ struct ContentView: View {
     
     private var actionsPanel: some View {
         DeviceActionsView(viewModel: viewModel)
-            .frame(width: 300)
+            .frame(minWidth: 260, idealWidth: 320, maxWidth: 420)
             .frame(maxHeight: .infinity)
     }
     
@@ -211,7 +211,7 @@ struct DeviceAvailabilityCell: View {
     let device: SimDevice
     
     var body: some View {
-        Text(device.isAvailable ? "Available" : "Unavailable")
+        Text(device.isAvailable ? L10n.t("Available") : L10n.t("Unavailable"))
             .foregroundColor(device.isAvailable ? .primary : .secondary)
     }
 }

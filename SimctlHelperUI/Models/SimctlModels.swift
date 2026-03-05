@@ -115,7 +115,7 @@ struct SimDevice: Codable, Identifiable {
     
     var firmwareVersion: String {
         // Will be populated from runtime info
-        runtimeIdentifier?.replacingOccurrences(of: "com.apple.CoreSimulator.SimRuntime.", with: "").replacingOccurrences(of: "-", with: " ") ?? "Unknown"
+        runtimeIdentifier?.replacingOccurrences(of: "com.apple.CoreSimulator.SimRuntime.", with: "").replacingOccurrences(of: "-", with: " ") ?? L10n.t("Unknown")
     }
     
     var deviceTypeName: String {
@@ -131,7 +131,12 @@ enum DeviceState: String, Codable {
     case shutdown = "Shutdown"
     
     var displayName: String {
-        rawValue
+        switch self {
+        case .booted:
+            return L10n.t("Booted")
+        case .shutdown:
+            return L10n.t("Shutdown")
+        }
     }
 }
 

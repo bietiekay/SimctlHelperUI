@@ -145,6 +145,15 @@ The app follows MVVM.
 
 ## Recent Changes (Documented)
 
+- UI/UX polish + i18n v1 (DE/EN):
+  - Reworked Location Player navigation from mode toggle to persistent sidebar sections (`Locations` + `Routes`) backed by `LibrarySelection`.
+  - Migrated large modal workflows (Map Editor, GPX Preview, Library Import Selection) to dedicated resizable auxiliary windows with per-window autosaved frame state.
+  - Introduced localization infrastructure (`L10n` + `Localizable.xcstrings`) and migrated visible UI labels, error messages, and generated default names to localized strings.
+  - Added German as project localization region and enabled automatic language selection via system locale (`en`/`de`).
+  - Refined main window density/spacing and adaptive panel sizing to reduce dead whitespace.
+  - Added native minimum-size enforcement for Location Player windows (minimum equals default size) using system window constraints instead of manual resize correction.
+  - Added semantic button highlighting for route/location execution controls (`Play/Pause/Resume/Stop`, `Set/Clear/Reset Location`).
+  - Cleaned String Catalog metadata to avoid false-positive stale markers when using the `L10n` wrapper pattern.
 - Added Location Player access via:
   - booted row context menu,
   - double-click on booted row,

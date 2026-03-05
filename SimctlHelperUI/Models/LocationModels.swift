@@ -10,15 +10,15 @@ nonisolated enum LocationValidationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidLatitude(let value):
-            return "Invalid latitude \(value). Expected range: -90...90."
+            return L10n.f("Invalid latitude %@. Expected range: -90...90.", String(value))
         case .invalidLongitude(let value):
-            return "Invalid longitude \(value). Expected range: -180...180."
+            return L10n.f("Invalid longitude %@. Expected range: -180...180.", String(value))
         case .routeNeedsAtLeastTwoWaypoints:
-            return "A route requires at least two waypoints."
+            return L10n.t("A route requires at least two waypoints.")
         case .invalidSpeed(let value):
-            return "Invalid speed \(value). Speed must be greater than 0."
+            return L10n.f("Invalid speed %@. Speed must be greater than 0.", String(value))
         case .invalidUpdateValue(let value):
-            return "Invalid update value \(value). Value must be greater than 0."
+            return L10n.f("Invalid update value %@. Value must be greater than 0.", String(value))
         }
     }
 }
@@ -99,7 +99,7 @@ nonisolated struct SavedLocation: Codable, Identifiable, Equatable {
     mutating func normalizeName() {
         name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if name.isEmpty {
-            name = "Untitled Location"
+            name = L10n.t("Untitled Location")
         }
     }
 
@@ -132,7 +132,7 @@ nonisolated struct SavedRoute: Codable, Identifiable, Equatable {
     mutating func normalizeName() {
         name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if name.isEmpty {
-            name = "Untitled Route"
+            name = L10n.t("Untitled Route")
         }
     }
 
@@ -175,7 +175,7 @@ nonisolated struct LocationLibrary: Codable, Equatable {
 
     static var `default`: LocationLibrary {
         let defaultLocation = SavedLocation(
-            name: "Apple Park",
+            name: L10n.t("Apple Park"),
             point: GeoPoint(lat: 37.3349, lon: -122.0090)
         )
 
@@ -183,7 +183,7 @@ nonisolated struct LocationLibrary: Codable, Equatable {
             locations: [defaultLocation],
             routes: [
                 SavedRoute(
-                    name: "Campus Loop",
+                    name: L10n.t("Campus Loop"),
                     waypoints: [
                         GeoPoint(lat: 37.3349, lon: -122.0090),
                         GeoPoint(lat: 37.3317, lon: -122.0301),

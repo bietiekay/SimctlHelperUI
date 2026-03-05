@@ -18,15 +18,18 @@ enum SimctlError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .commandFailed(let message):
-            return "Command failed: \(message)"
+            return L10n.f("Command failed: %@", message)
         case .invalidJSON:
-            return "Invalid JSON response"
+            return L10n.t("Invalid JSON response")
         case .deviceNotFound:
-            return "Device not found"
+            return L10n.t("Device not found")
         case .invalidDeviceName:
-            return "Invalid device name"
+            return L10n.t("Invalid device name")
         case .refreshFailedAfterRetries(let message):
-            return "Device cloned successfully, but failed to refresh device list: \(message). Please refresh manually."
+            return L10n.f(
+                "Device cloned successfully, but failed to refresh device list: %@. Please refresh manually.",
+                message
+            )
         }
     }
 }

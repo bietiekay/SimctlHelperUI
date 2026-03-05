@@ -80,7 +80,7 @@ struct SimctlHelperUIApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        Window("Device Overview", id: "main") {
+        Window(L10n.t("Device Overview"), id: "main") {
             ContentView()
                 .background(
                     WindowObserverView { window in
@@ -90,10 +90,14 @@ struct SimctlHelperUIApp: App {
         }
         .defaultSize(width: 1100, height: 700)
 
-        WindowGroup("Location Player", id: "location-player", for: String.self) { udid in
+        WindowGroup(L10n.t("Location Player"), id: "location-player", for: String.self) { udid in
             LocationPlayerSceneView(initialUDID: udid.wrappedValue)
         }
-        .defaultSize(width: 980, height: 640)
+        .defaultSize(
+            width: LocationPlayerWindowCoordinator.locationPlayerDefaultSize.width,
+            height: LocationPlayerWindowCoordinator.locationPlayerDefaultSize.height
+        )
+        .windowResizability(.contentMinSize)
         .commands {
             LocationDataCommands()
         }
@@ -128,21 +132,21 @@ private struct LocationDataCommands: Commands {
         CommandGroup(after: .importExport) {
             Divider()
 
-            Button("Import GPX Route...") {
+            Button(L10n.t("Import GPX Route...")) {
                 perform(.importGPXRoute)
             }
 
-            Button("Import Location/Route Library...") {
+            Button(L10n.t("Import Location/Route Library...")) {
                 perform(.importLibraryJSON)
             }
 
-            Button("Export Location/Route Library...") {
+            Button(L10n.t("Export Location/Route Library...")) {
                 perform(.exportLibraryJSON)
             }
         }
 
         CommandGroup(replacing: .appTermination) {
-            Button("Quit SimctlHelperUI") {
+            Button(L10n.t("Quit SimctlHelperUI")) {
                 NSApp.terminate(nil)
             }
             .keyboardShortcut("q")

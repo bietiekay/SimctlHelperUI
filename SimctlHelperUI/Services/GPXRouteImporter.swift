@@ -9,13 +9,13 @@ enum GPXImportError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .unreadable:
-            return "The GPX file could not be read."
+            return L10n.t("The GPX file could not be read.")
         case .invalidFormat(let message):
-            return "Invalid GPX format: \(message)"
+            return L10n.f("Invalid GPX format: %@", message)
         case .noRoutePoints:
-            return "No route points found. The GPX must contain at least two track/route points."
+            return L10n.t("No route points found. The GPX must contain at least two track/route points.")
         case .noRoutePointsInSelection:
-            return "No route points found in the selected time range."
+            return L10n.t("No route points found in the selected time range.")
         }
     }
 }

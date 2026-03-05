@@ -30,7 +30,7 @@ final class LocationPlayerViewModel: ObservableObject {
     ) {
         let resolvedUDID = udid ?? ""
         self.udid = resolvedUDID
-        self.deviceName = initialDeviceName ?? (resolvedUDID.isEmpty ? "No simulator selected" : resolvedUDID)
+        self.deviceName = initialDeviceName ?? (resolvedUDID.isEmpty ? L10n.t("No simulator selected") : resolvedUDID)
         self.service = service
         self.libraryStore = libraryStore
 
@@ -177,7 +177,7 @@ final class LocationPlayerViewModel: ObservableObject {
                     udid = fallback.udid
                 } else {
                     udid = ""
-                    deviceName = "No simulator selected"
+                    deviceName = L10n.t("No simulator selected")
                     deviceState = .shutdown
                     playbackState = .idle
                     return
@@ -185,7 +185,7 @@ final class LocationPlayerViewModel: ObservableObject {
             }
 
             guard let selected = flattenedDevices.first(where: { $0.udid == udid }) else {
-                deviceName = "No simulator selected"
+                deviceName = L10n.t("No simulator selected")
                 deviceState = .shutdown
                 playbackState = .idle
                 return
@@ -198,7 +198,7 @@ final class LocationPlayerViewModel: ObservableObject {
             if selected.state != .booted, hasRunningSession {
                 await service.stopRoute(udid: udid)
                 playbackState = service.playbackState(udid: udid)
-                errorMessage = "The simulator is no longer booted. Playback was stopped."
+                errorMessage = L10n.t("The simulator is no longer booted. Playback was stopped.")
                 logDebug("Stopped playback because simulator is no longer booted (udid=\(udid))")
             }
         } catch {
@@ -210,13 +210,13 @@ final class LocationPlayerViewModel: ObservableObject {
     private func ensureTargetDeviceBootedForSend() async throws {
         logDebug("ensureTargetDeviceBootedForSend() start for udid=\(udid), isBooted=\(isDeviceBooted), autoBoot=\(autoBootOnSend)")
         guard hasTargetDevice else {
-            throw SimctlError.commandFailed("Select a target simulator in the Location Player first.")
+            throw SimctlError.commandFailed(L10n.t("Select a target simulator in the Location Player first."))
         }
 
         guard !isDeviceBooted else { return }
 
         guard autoBootOnSend else {
-            throw SimctlError.commandFailed("Selected simulator is shutdown. Enable Auto-Boot or boot it manually.")
+            throw SimctlError.commandFailed(L10n.t("Selected simulator is shutdown. Enable Auto-Boot or boot it manually."))
         }
 
         do {
@@ -243,7 +243,7 @@ final class LocationPlayerViewModel: ObservableObject {
         }
 
         logDebug("Boot timeout reached for udid=\(udid)")
-        throw SimctlError.commandFailed("Failed to boot selected simulator within timeout.")
+        throw SimctlError.commandFailed(L10n.t("Failed to boot selected simulator within timeout."))
     }
 
     func saveLibrary() {
@@ -362,7 +362,12 @@ final class LocationPlayerViewModel: ObservableObject {
 
         saveLibrary()
         if skippedLocations + skippedRoutes > 0 {
-            errorMessage = "Imported \(importedLocations) location(s), \(importedRoutes) route(s). Skipped \(skippedLocations + skippedRoutes) invalid item(s)."
+            errorMessage = L10n.f(
+                "Imported %d location(s), %d route(s). Skipped %d invalid item(s).",
+                importedLocations,
+                importedRoutes,
+                skippedLocations + skippedRoutes
+            )
         } else {
             errorMessage = nil
         }
@@ -386,7 +391,7 @@ final class LocationPlayerViewModel: ObservableObject {
 
     @discardableResult
     func addLocation(at point: GeoPoint) -> UUID {
-        let location = SavedLocation(name: "New Location", point: point)
+        let location = SavedLocation(name: L10n.t("New Location"), point: point)
         locations.append(location)
         if defaultLocationID == nil {
             defaultLocationID = location.id
@@ -408,7 +413,7 @@ final class LocationPlayerViewModel: ObservableObject {
 
     func addRoute() {
         let route = SavedRoute(
-            name: "New Route",
+            name: L10n.t("New Route"),
             waypoints: [
                 GeoPoint(lat: 0, lon: 0),
                 GeoPoint(lat: 0.001, lon: 0.001)
@@ -461,12 +466,12 @@ final class LocationPlayerViewModel: ObservableObject {
 
     func applySelectedLocation() {
         guard hasTargetDevice else {
-            errorMessage = "Select a target simulator first."
+            errorMessage = L10n.t("Select a target simulator first.")
             return
         }
 
         guard let index = selectedLocationIndex else {
-            errorMessage = "Select a location first."
+            errorMessage = L10n.t("Select a location first.")
             return
         }
 
@@ -489,12 +494,12 @@ final class LocationPlayerViewModel: ObservableObject {
 
     func playSelectedRoute() {
         guard hasTargetDevice else {
-            errorMessage = "Select a target simulator first."
+            errorMessage = L10n.t("Select a target simulator first.")
             return
         }
 
         guard let index = selectedRouteIndex else {
-            errorMessage = "Select a route first."
+            errorMessage = L10n.t("Select a route first.")
             return
         }
 
@@ -569,14 +574,14 @@ final class LocationPlayerViewModel: ObservableObject {
     var defaultLocationName: String {
         guard let defaultLocationID,
               let location = locations.first(where: { $0.id == defaultLocationID }) else {
-            return "None"
+            return L10n.t("None")
         }
         return location.name
     }
 
     func setDefaultLocationToSelection() {
         guard let selectedLocationID else {
-            errorMessage = "Select a location first."
+            errorMessage = L10n.t("Select a location first.")
             return
         }
         defaultLocationID = selectedLocationID
@@ -585,13 +590,13 @@ final class LocationPlayerViewModel: ObservableObject {
 
     func resetToDefaultLocation() {
         guard hasTargetDevice else {
-            errorMessage = "Select a target simulator first."
+            errorMessage = L10n.t("Select a target simulator first.")
             return
         }
 
         guard let defaultLocationID,
               let location = locations.first(where: { $0.id == defaultLocationID }) else {
-            errorMessage = "No default location configured."
+            errorMessage = L10n.t("No default location configured.")
             return
         }
 
@@ -610,7 +615,7 @@ final class LocationPlayerViewModel: ObservableObject {
 
     func clearAppliedLocation() {
         guard hasTargetDevice else {
-            errorMessage = "Select a target simulator first."
+            errorMessage = L10n.t("Select a target simulator first.")
             return
         }
 
@@ -629,7 +634,7 @@ final class LocationPlayerViewModel: ObservableObject {
     func togglePauseResume() {
         errorMessage = nil
         guard hasTargetDevice else {
-            errorMessage = "Select a target simulator first."
+            errorMessage = L10n.t("Select a target simulator first.")
             return
         }
 
@@ -644,7 +649,7 @@ final class LocationPlayerViewModel: ObservableObject {
             case .paused:
                 try service.resumeRoute(udid: udid)
             default:
-                errorMessage = "No active route to pause or resume."
+                errorMessage = L10n.t("No active route to pause or resume.")
             }
             playbackState = service.playbackState(udid: udid)
             logDebug("togglePauseResume() success for udid=\(udid), newState=\(playbackState)")
@@ -657,7 +662,7 @@ final class LocationPlayerViewModel: ObservableObject {
     func stop() {
         errorMessage = nil
         guard hasTargetDevice else {
-            errorMessage = "Select a target simulator first."
+            errorMessage = L10n.t("Select a target simulator first.")
             return
         }
 
@@ -676,9 +681,9 @@ final class LocationPlayerViewModel: ObservableObject {
     }
 
     var debugLogShareText: String {
-        let header = "SimctlHelperUI Debug Log\nDevice: \(deviceName)\nUDID: \(udid)\n-----\n"
+        let header = L10n.f("SimctlHelperUI Debug Log\nDevice: %@\nUDID: %@\n-----\n", deviceName, udid)
         if debugLogText.isEmpty {
-            return "\(header)(empty)"
+            return "\(header)\(L10n.t("(empty)"))"
         }
         return "\(header)\(debugLogText)"
     }

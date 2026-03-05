@@ -17,18 +17,18 @@ struct DeviceActionsView: View {
     
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 if let device = viewModel.selectedDevice {
                     // Device Info
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Device Details")
+                        Text(L10n.t("Device Details"))
                             .font(.headline)
                         
-                        InfoRow(label: "Name", value: device.name)
-                        InfoRow(label: "State", value: device.state.displayName)
-                        InfoRow(label: "Availability", value: device.isAvailable ? "Available" : "Unavailable")
-                        InfoRow(label: "Device Type", value: viewModel.deviceTypeName(for: device))
-                        InfoRow(label: "Runtime", value: viewModel.runtimeVersion(for: device))
+                        InfoRow(label: L10n.t("Name"), value: device.name)
+                        InfoRow(label: L10n.t("State"), value: device.state.displayName)
+                        InfoRow(label: L10n.t("Availability"), value: device.isAvailable ? L10n.t("Available") : L10n.t("Unavailable"))
+                        InfoRow(label: L10n.t("Device Type"), value: viewModel.deviceTypeName(for: device))
+                        InfoRow(label: L10n.t("Runtime"), value: viewModel.runtimeVersion(for: device))
                         InfoRow(label: "UDID", value: device.udid)
                             .font(.system(.caption, design: .monospaced))
                     }
@@ -48,7 +48,7 @@ struct DeviceActionsView: View {
                         Button(action: {
                             showCloneDialog = true
                         }) {
-                            Label("Clone Device", systemImage: "doc.on.doc")
+                            Label(L10n.t("Clone Device"), systemImage: "doc.on.doc")
                                 .frame(maxWidth: .infinity)
                         }
                         .disabled(isPerformingAction)
@@ -58,7 +58,7 @@ struct DeviceActionsView: View {
                             toggleBootState()
                         }) {
                             Label(
-                                device.isBooted ? "Shutdown" : "Boot",
+                                device.isBooted ? L10n.t("Shutdown") : L10n.t("Boot"),
                                 systemImage: device.isBooted ? "power" : "power.circle"
                             )
                             .frame(maxWidth: .infinity)
@@ -68,7 +68,7 @@ struct DeviceActionsView: View {
                         Button(action: {
                             openLocationPlayerWindow(for: device.udid)
                         }) {
-                            Label("Location Player", systemImage: "location")
+                            Label(L10n.t("Location Player"), systemImage: "location")
                                 .frame(maxWidth: .infinity)
                         }
                         .disabled(isPerformingAction)
@@ -77,20 +77,20 @@ struct DeviceActionsView: View {
                         Button(role: .destructive, action: {
                             showDeleteConfirmation = true
                         }) {
-                            Label("Delete Device", systemImage: "trash")
+                            Label(L10n.t("Delete Device"), systemImage: "trash")
                                 .frame(maxWidth: .infinity)
                         }
                         .disabled(isPerformingAction)
                     }
                 } else {
                     VStack(spacing: 12) {
-                        Text("No device selected")
+                        Text(L10n.t("No device selected"))
                             .foregroundColor(.secondary)
 
                         Button(action: {
                             openLocationPlayerWindow(for: nil)
                         }) {
-                            Label("Open Location Player", systemImage: "location")
+                            Label(L10n.t("Open Location Player"), systemImage: "location")
                                 .frame(maxWidth: .infinity)
                         }
                     }
@@ -111,14 +111,14 @@ struct DeviceActionsView: View {
                 }
             }
         }
-        .alert("Delete Device", isPresented: $showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) {
+        .alert(L10n.t("Delete Device"), isPresented: $showDeleteConfirmation) {
+            Button(L10n.t("Cancel"), role: .cancel) {}
+            Button(L10n.t("Delete"), role: .destructive) {
                 deleteDevice()
             }
         } message: {
             if let device = viewModel.selectedDevice {
-                Text("Are you sure you want to delete \"\(device.name)\"? This action cannot be undone.")
+                Text(L10n.f("Are you sure you want to delete \"%@\"? This action cannot be undone.", device.name))
             }
         }
     }

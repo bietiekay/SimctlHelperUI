@@ -18,14 +18,14 @@ struct CloneDeviceView: View {
     
     var body: some View {
         VStack(spacing: 20) {
-            Text("Clone Device")
+            Text(L10n.t("Clone Device"))
                 .font(.headline)
             
-            Text("Clone \"\(deviceName)\"")
+            Text(L10n.f("Clone \"%@\"", deviceName))
                 .font(.subheadline)
                 .foregroundColor(.secondary)
             
-            TextField("New device name", text: $newName)
+            TextField(L10n.t("New device name"), text: $newName)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit {
                     if isValid {
@@ -40,12 +40,12 @@ struct CloneDeviceView: View {
             }
             
             HStack {
-                Button("Cancel") {
+                Button(L10n.t("Cancel")) {
                     isPresented = false
                 }
                 .keyboardShortcut(.cancelAction)
                 
-                Button("Clone") {
+                Button(L10n.t("Clone")) {
                     cloneDevice()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -55,7 +55,7 @@ struct CloneDeviceView: View {
         .padding()
         .frame(width: 400)
         .onAppear {
-            newName = "\(deviceName) Copy"
+            newName = L10n.f("%@ Copy", deviceName)
         }
     }
     

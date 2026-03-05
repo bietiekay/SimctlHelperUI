@@ -369,10 +369,10 @@ final class LocationFeatureTests: XCTestCase {
         XCTAssertEqual(viewModel.locations.first(where: { $0.id == location.id })?.name, "Home")
 
         viewModel.renameLocation(id: location.id, to: "   ")
-        XCTAssertEqual(viewModel.locations.first(where: { $0.id == location.id })?.name, "Untitled Location")
+        XCTAssertEqual(viewModel.locations.first(where: { $0.id == location.id })?.name, L10n.t("Untitled Location"))
 
         let persisted = try store.load()
-        XCTAssertEqual(persisted.locations.first(where: { $0.id == location.id })?.name, "Untitled Location")
+        XCTAssertEqual(persisted.locations.first(where: { $0.id == location.id })?.name, L10n.t("Untitled Location"))
     }
 
     func testRenameRouteUpdatesNameAndPersists() throws {
@@ -410,10 +410,56 @@ final class LocationFeatureTests: XCTestCase {
         XCTAssertEqual(viewModel.routes.first(where: { $0.id == route.id })?.name, "Morning Ride")
 
         viewModel.renameRoute(id: route.id, to: " ")
-        XCTAssertEqual(viewModel.routes.first(where: { $0.id == route.id })?.name, "Untitled Route")
+        XCTAssertEqual(viewModel.routes.first(where: { $0.id == route.id })?.name, L10n.t("Untitled Route"))
 
         let persisted = try store.load()
-        XCTAssertEqual(persisted.routes.first(where: { $0.id == route.id })?.name, "Untitled Route")
+        XCTAssertEqual(persisted.routes.first(where: { $0.id == route.id })?.name, L10n.t("Untitled Route"))
+    }
+
+    func testLibrarySelectionConvenienceAccessors() {
+        let locationID = UUID(uuidString: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")!
+        let routeID = UUID(uuidString: "ffffffff-ffff-ffff-ffff-ffffffffffff")!
+
+        let locationSelection = LibrarySelection.location(locationID)
+        XCTAssertEqual(locationSelection.locationID, locationID)
+        XCTAssertNil(locationSelection.routeID)
+
+        let routeSelection = LibrarySelection.route(routeID)
+        XCTAssertEqual(routeSelection.routeID, routeID)
+        XCTAssertNil(routeSelection.locationID)
+    }
+
+    func testAuxWindowKeyIncludesOwnerIdentifier() {
+        let keyWithOwner = LocationPlayerAuxWindowCoordinator.windowKey(
+            ownerWindowIdentifier: "window-a",
+            kind: .gpxPreview
+        )
+        XCTAssertEqual(keyWithOwner, "window-a|gpxPreview")
+
+        let keyWithoutOwner = LocationPlayerAuxWindowCoordinator.windowKey(
+            ownerWindowIdentifier: nil,
+            kind: .gpxPreview
+        )
+        XCTAssertEqual(keyWithoutOwner, "gpxPreview")
+    }
+
+    func testLocalizedDefaultsAndErrorsResolveFromL10n() {
+        var location = SavedLocation(name: " ", point: GeoPoint(lat: 1, lon: 1))
+        location.normalizeName()
+        XCTAssertEqual(location.name, L10n.t("Untitled Location"))
+
+        var route = SavedRoute(name: " ", waypoints: [GeoPoint(lat: 1, lon: 1), GeoPoint(lat: 2, lon: 2)])
+        route.normalizeName()
+        XCTAssertEqual(route.name, L10n.t("Untitled Route"))
+
+        XCTAssertEqual(
+            LocationValidationError.routeNeedsAtLeastTwoWaypoints.errorDescription,
+            L10n.t("A route requires at least two waypoints.")
+        )
+        XCTAssertEqual(
+            GPXImportError.noRoutePoints.errorDescription,
+            L10n.t("No route points found. The GPX must contain at least two track/route points.")
+        )
     }
 }
 

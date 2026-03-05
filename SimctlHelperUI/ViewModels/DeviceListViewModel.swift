@@ -182,7 +182,7 @@ class DeviceListViewModel: ObservableObject {
     func runtimeVersion(for device: SimDevice) -> String {
         guard let runtimeId = device.runtimeIdentifier,
               let runtime = runtimes[runtimeId] else {
-            return "Unknown"
+            return L10n.t("Unknown")
         }
         return runtime.name
     }
@@ -228,7 +228,7 @@ class DeviceListViewModel: ObservableObject {
         }
         
         // If all retries failed, throw an error indicating clone succeeded but refresh failed
-        throw SimctlError.refreshFailedAfterRetries(lastError?.localizedDescription ?? "Unknown error")
+        throw SimctlError.refreshFailedAfterRetries(lastError?.localizedDescription ?? L10n.t("Unknown error"))
     }
     
     func deleteDevice(udid: String) async throws {
