@@ -259,93 +259,64 @@ struct LocationPlayerView: View {
     }
 
     private var libraryPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            List(selection: $librarySelection) {
-                Section(L10n.t("Locations")) {
-                    ForEach(viewModel.locations) { location in
-                        HStack {
-                            Text(location.name)
-                            Spacer()
-                            if viewModel.defaultLocationID == location.id {
-                                Image(systemName: "star.fill")
-                                    .foregroundColor(.yellow)
-                            }
+        List(selection: $librarySelection) {
+            Section {
+                ForEach(viewModel.locations) { location in
+                    HStack {
+                        Text(location.name)
+                        Spacer()
+                        if viewModel.defaultLocationID == location.id {
+                            Image(systemName: "star.fill")
+                                .foregroundColor(.yellow)
                         }
-                        .tag(LibrarySelection.location(location.id))
                     }
-                }
-
-                Section(L10n.t("Routes")) {
-                    ForEach(viewModel.routes) { route in
-                        Text(route.name)
-                            .tag(LibrarySelection.route(route.id))
+                    .contentShape(Rectangle())
+                    .contextMenu {
+                        locationContextMenu(for: location)
                     }
+                    .tag(LibrarySelection.location(location.id))
                 }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .background(Color(NSColor.windowBackgroundColor))
-            .frame(minHeight: 220)
-
-            GroupBox(L10n.t("Location Actions")) {
+            } header: {
                 HStack {
-                    Button(L10n.t("Add")) {
+                    Text(L10n.t("Locations"))
+                    Spacer()
+                    Button {
                         openLocationMapPicker()
+                    } label: {
+                        Image(systemName: "plus")
                     }
-                    Button(L10n.t("Rename")) {
-                        beginRenameSelectedLocation()
-                    }
-                    .disabled(viewModel.selectedLocationID == nil)
-                    Button(L10n.t("Delete")) {
-                        viewModel.deleteSelectedLocation()
-                        syncSelectionFromViewModel()
-                    }
-                    .disabled(viewModel.selectedLocationID == nil)
-                    Button(L10n.t("Set Default")) {
-                        viewModel.setDefaultLocationToSelection()
-                    }
-                    .disabled(viewModel.selectedLocationID == nil)
+                    .buttonStyle(.borderless)
+                    .help(L10n.t("Add"))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            GroupBox(L10n.t("Route Actions")) {
+            Section {
+                ForEach(viewModel.routes) { route in
+                    Text(route.name)
+                        .contentShape(Rectangle())
+                        .contextMenu {
+                            routeContextMenu(for: route)
+                        }
+                        .tag(LibrarySelection.route(route.id))
+                }
+            } header: {
                 HStack {
-                    Button(L10n.t("Add")) {
+                    Text(L10n.t("Routes"))
+                    Spacer()
+                    Button {
                         viewModel.addRoute()
                         syncSelectionFromViewModel()
+                    } label: {
+                        Image(systemName: "plus")
                     }
-                    Button(L10n.t("Rename")) {
-                        beginRenameSelectedRoute()
-                    }
-                    .disabled(viewModel.selectedRouteID == nil)
-                    Button(L10n.t("Delete")) {
-                        viewModel.deleteSelectedRoute()
-                        syncSelectionFromViewModel()
-                    }
-                    .disabled(viewModel.selectedRouteID == nil)
-                    Button(L10n.t("Import GPX")) {
-                        beginGPXRouteImport()
-                    }
+                    .buttonStyle(.borderless)
+                    .help(L10n.t("Add"))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            GroupBox(L10n.t("Library File")) {
-                HStack {
-                    Button(L10n.t("Export All")) {
-                        beginLibraryExport()
-                    }
-                    Button(L10n.t("Import...")) {
-                        beginLibraryImport()
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            Spacer()
         }
-        .padding(12)
+        .frame(minHeight: 220)
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
         .background(Color(NSColor.windowBackgroundColor))
     }
 
@@ -1066,6 +1037,46 @@ struct LocationPlayerView: View {
         }
     }
 
+    private func selectLocationForLibraryAction(_ locationID: UUID) {
+        viewModel.selectLocation(locationID)
+        syncSelectionFromViewModel()
+    }
+
+    private func selectRouteForLibraryAction(_ routeID: UUID) {
+        viewModel.selectRoute(routeID)
+        syncSelectionFromViewModel()
+    }
+
+    @ViewBuilder
+    private func locationContextMenu(for location: SavedLocation) -> some View {
+        Button(L10n.t("Rename"), systemImage: "pencil") {
+            beginRenameLocation(location.id)
+        }
+        Button(L10n.t("Set Default"), systemImage: "star") {
+            selectLocationForLibraryAction(location.id)
+            viewModel.setDefaultLocationToSelection()
+        }
+        Divider()
+        Button(L10n.t("Delete"), systemImage: "trash", role: .destructive) {
+            selectLocationForLibraryAction(location.id)
+            viewModel.deleteSelectedLocation()
+            syncSelectionFromViewModel()
+        }
+    }
+
+    @ViewBuilder
+    private func routeContextMenu(for route: SavedRoute) -> some View {
+        Button(L10n.t("Rename"), systemImage: "pencil") {
+            beginRenameRoute(route.id)
+        }
+        Divider()
+        Button(L10n.t("Delete"), systemImage: "trash", role: .destructive) {
+            selectRouteForLibraryAction(route.id)
+            viewModel.deleteSelectedRoute()
+            syncSelectionFromViewModel()
+        }
+    }
+
     private func processPendingMenuCommand() {
         guard let command = LocationPlayerMenuCommandCenter.shared.consumeCommand(
             for: locationPlayerWindowIdentifier
@@ -1083,21 +1094,17 @@ struct LocationPlayerView: View {
         }
     }
 
-    private func beginRenameSelectedLocation() {
+    private func beginRenameLocation(_ locationID: UUID) {
         flushLocationDraftSave()
-        guard let selectedLocationID = viewModel.selectedLocationID,
-              let location = viewModel.locations.first(where: { $0.id == selectedLocationID }) else {
-            return
-        }
+        selectLocationForLibraryAction(locationID)
+        guard let location = viewModel.locations.first(where: { $0.id == locationID }) else { return }
         renameContext = RenameContext(item: .location(location.id), currentName: location.name)
     }
 
-    private func beginRenameSelectedRoute() {
+    private func beginRenameRoute(_ routeID: UUID) {
         flushRouteDraftSave()
-        guard let selectedRouteID = viewModel.selectedRouteID,
-              let route = viewModel.routes.first(where: { $0.id == selectedRouteID }) else {
-            return
-        }
+        selectRouteForLibraryAction(routeID)
+        guard let route = viewModel.routes.first(where: { $0.id == routeID }) else { return }
         renameContext = RenameContext(item: .route(route.id), currentName: route.name)
     }
 

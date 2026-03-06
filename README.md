@@ -46,6 +46,9 @@ The Location Player opens in its own window and is bound to a single simulator U
 
 ### Location Features
 
+- Library actions are split by scope:
+  - `+` in the `Locations` section header adds a new saved location
+  - Right-click a saved location for `Rename`, `Set Default`, and `Delete`
 - Apply a static location with `simctl location <udid> set <lat>,<lon>`
 - Rename saved locations
 - Edit coordinates manually
@@ -53,6 +56,9 @@ The Location Player opens in its own window and is bound to a single simulator U
 
 ### Route Features
 
+- Library actions are split by scope:
+  - `+` in the `Routes` section header adds a new route
+  - Right-click a saved route for `Rename` and `Delete`
 - Waypoint-based routes using `simctl location <udid> start ...`
 - Rename saved routes
 - Route parameters:
@@ -74,9 +80,7 @@ The Location Player opens in its own window and is bound to a single simulator U
 
 ## Library Import/Export
 
-- `Export All` writes the full location/route library to one JSON file.
-- `Import...` reads a JSON library file and opens a selection sheet.
-- The app menu (`File`) also provides:
+- The app menu (`File`) provides:
   - `Import GPX Route...`
   - `Import Location/Route Library...`
   - `Export Location/Route Library...`
