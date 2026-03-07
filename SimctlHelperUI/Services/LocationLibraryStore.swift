@@ -19,6 +19,10 @@ nonisolated final class LocationLibraryStore {
         self.decoder = JSONDecoder()
     }
 
+    var storageIdentifier: String {
+        baseDirectoryURL?.path ?? "shared"
+    }
+
     private var libraryURL: URL {
         let appSupportURL = baseDirectoryURL ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return appSupportURL

@@ -17,13 +17,14 @@ struct LocationPlayerView: View {
     @State private var locationDraft: SavedLocation?
     @State private var routeDraft: SavedRoute?
     @State private var isSyncingSelection = false
-    @State private var libraryExportDocument = LocationLibraryDocument(data: Data())
-    @State private var renameContext: RenameContext?
+    @State private var libraryExportDocument = LocationLibraryTransferDocument(data: Data())
     @State private var pendingLocationSaveTask: Task<Void, Never>?
     @State private var pendingRouteSaveTask: Task<Void, Never>?
-    @State private var isDebugLogExpanded = false
-    @State private var locationPlayerWindowIdentifier: String?
+    @State private var locationSimulationWindowIdentifier: String?
     @State private var owningWindow: NSWindow?
+
+    private let inlineWaypointEditingLimit = 20
+    private let mapWaypointEditingLimit = 3_000
 
     private var allowedImportContentTypes: [UTType] {
         switch activeFileImportKind {
@@ -37,23 +38,32 @@ struct LocationPlayerView: View {
         }
     }
 
-    private let inlineWaypointEditingLimit = 20
-    private let mapWaypointEditingLimit = 3_000
-    private var locationPlayerMinimumSize: NSSize {
-        LocationPlayerWindowCoordinator.locationPlayerDefaultSize
-    }
-
     var body: some View {
         VStack(spacing: 0) {
+            if let feedback = viewModel.feedback {
+                HStack(spacing: 10) {
+                    FeedbackBannerView(message: feedback)
+                    Button {
+                        viewModel.clearFeedback()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
+            }
+
             headerView
             Divider()
 
             HSplitView {
                 libraryPanel
-                    .frame(minWidth: 280, idealWidth: 330, maxWidth: 420)
+                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 400)
 
                 detailPanel
-                    .frame(minWidth: 500, maxWidth: .infinity)
+                    .frame(minWidth: 520, maxWidth: .infinity)
             }
             .layoutPriority(1)
 
@@ -61,10 +71,10 @@ struct LocationPlayerView: View {
             playbackControls
         }
         .frame(
-            minWidth: locationPlayerMinimumSize.width,
-            minHeight: locationPlayerMinimumSize.height
+            minWidth: LocationPlayerWindowCoordinator.locationPlayerDefaultSize.width,
+            minHeight: LocationPlayerWindowCoordinator.locationPlayerDefaultSize.height
         )
-        .navigationTitle(L10n.f("Location Player - %@", viewModel.deviceName))
+        .navigationTitle(L10n.f("Location Simulation - %@", viewModel.deviceName))
         .background(Color(NSColor.windowBackgroundColor))
         .background(
             WindowObserverView { window in
@@ -73,9 +83,24 @@ struct LocationPlayerView: View {
                 }
             }
         )
+        .toolbar {
+            ToolbarItemGroup {
+                Button(L10n.t("Refresh")) {
+                    Task {
+                        await viewModel.refreshDeviceStatus()
+                    }
+                }
+
+                Menu {
+                    Toggle(L10n.t("Auto-Boot on Send"), isOn: $viewModel.autoBootOnSend)
+                } label: {
+                    Label(L10n.t("Options"), systemImage: "slider.horizontal.3")
+                }
+            }
+        }
         .focusedSceneValue(
-            \.locationPlayerMenuActions,
-            LocationPlayerMenuActions(
+            \.libraryMenuActions,
+            LibraryMenuActions(
                 importGPXRoute: { beginGPXRouteImport() },
                 importLibraryJSON: { beginLibraryImport() },
                 exportLibraryJSON: { beginLibraryExport() }
@@ -85,13 +110,6 @@ struct LocationPlayerView: View {
             viewModel.start()
             ensureLibrarySelection()
             syncSelectionFromViewModel()
-            processPendingMenuCommand()
-        }
-        .onDisappear {
-            viewModel.handleWindowClose()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .locationPlayerMenuCommandQueued)) { _ in
-            processPendingMenuCommand()
         }
         .onChange(of: librarySelection) { _, value in
             guard !isSyncingSelection else { return }
@@ -123,20 +141,6 @@ struct LocationPlayerView: View {
             ensureLibrarySelection()
             syncRouteDraft()
         }
-        .sheet(item: $renameContext) { context in
-            RenameItemSheet(
-                title: context.title,
-                initialName: context.currentName
-            ) { newName in
-                switch context.item {
-                case .location(let locationID):
-                    viewModel.renameLocation(id: locationID, to: newName)
-                case .route(let routeID):
-                    viewModel.renameRoute(id: routeID, to: newName)
-                }
-                syncSelectionFromViewModel()
-            }
-        }
         .fileImporter(
             isPresented: $isFileImporterPresented,
             allowedContentTypes: allowedImportContentTypes,
@@ -159,7 +163,7 @@ struct LocationPlayerView: View {
                     break
                 }
             case .failure(let error):
-                viewModel.errorMessage = error.localizedDescription
+                viewModel.feedback = FeedbackMessage(level: .error, text: error.localizedDescription)
             }
         }
         .fileExporter(
@@ -169,93 +173,54 @@ struct LocationPlayerView: View {
             defaultFilename: libraryExportFilename
         ) { result in
             if case .failure(let error) = result {
-                viewModel.errorMessage = error.localizedDescription
+                viewModel.feedback = FeedbackMessage(level: .error, text: error.localizedDescription)
             }
         }
     }
 
     @MainActor
     private func resolveOwningWindow(_ window: NSWindow) {
-        let resolvedIdentifier = window.identifier?.rawValue
-        if locationPlayerWindowIdentifier != resolvedIdentifier {
-            locationPlayerWindowIdentifier = resolvedIdentifier
-        }
-        if owningWindow !== window {
-            owningWindow = window
-        }
-        processPendingMenuCommand()
+        locationSimulationWindowIdentifier = window.identifier?.rawValue
+        owningWindow = window
     }
 
     private var headerView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 12) {
-                Text(L10n.t("Target Device"))
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-
-                Picker(
-                    L10n.t("Target Device"),
-                    selection: Binding(
-                        get: { viewModel.udid },
-                        set: { viewModel.selectTargetDevice($0) }
-                    )
-                ) {
-                    if viewModel.availableDevices.isEmpty {
-                        Text(L10n.t("No devices found")).tag("")
-                    } else {
-                        ForEach(viewModel.availableDevices) { device in
-                            Text(
-                                L10n.f(
-                                    "%@ (%@)",
-                                    device.name,
-                                    device.isBooted ? L10n.t("Booted") : L10n.t("Shutdown")
-                                )
-                            )
-                                .tag(device.udid)
-                        }
-                    }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(viewModel.deviceName)
+                        .font(.title3.weight(.semibold))
+                    Text(L10n.t("This window is bound to a single simulator."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(minWidth: 300)
-                .disabled(viewModel.availableDevices.isEmpty)
-
-                Toggle(L10n.t("Auto-Boot on Send"), isOn: $viewModel.autoBootOnSend)
-                    .toggleStyle(.checkbox)
 
                 Spacer()
-            }
 
-            HStack(spacing: 12) {
-                Text(L10n.f("UDID: %@", viewModel.udid))
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.secondary)
-
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Circle()
                         .fill(viewModel.isDeviceBooted ? .green : .gray)
                         .frame(width: 8, height: 8)
                     Text(viewModel.isDeviceBooted ? L10n.t("Booted") : L10n.t("Shutdown"))
-                        .font(.caption)
-                        .foregroundColor(viewModel.isDeviceBooted ? .primary : .secondary)
+                        .font(.callout)
+                        .foregroundStyle(viewModel.isDeviceBooted ? .primary : .secondary)
                 }
+            }
+
+            HStack(spacing: 12) {
+                Text(L10n.f("UDID: %@", viewModel.targetUDID))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
 
                 Text(L10n.f("Default: %@", viewModel.defaultLocationName))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
 
                 Spacer()
             }
-
-            if let errorMessage = viewModel.errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundColor(.red)
-            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(16)
     }
 
     private var libraryPanel: some View {
@@ -267,7 +232,7 @@ struct LocationPlayerView: View {
                         Spacer()
                         if viewModel.defaultLocationID == location.id {
                             Image(systemName: "star.fill")
-                                .foregroundColor(.yellow)
+                                .foregroundStyle(.yellow)
                         }
                     }
                     .contentShape(Rectangle())
@@ -314,7 +279,6 @@ struct LocationPlayerView: View {
                 }
             }
         }
-        .frame(minHeight: 220)
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .background(Color(NSColor.windowBackgroundColor))
@@ -329,18 +293,18 @@ struct LocationPlayerView: View {
                         locationDetails(location: locationDraft)
                     } else {
                         Text(L10n.t("Select a location from the library."))
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                 case .route:
                     if let routeDraft {
                         routeDetails(route: routeDraft)
                     } else {
                         Text(L10n.t("Select a route from the library."))
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                 case .none:
                     Text(L10n.t("Select a location or route from the library."))
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
             }
             .padding()
@@ -404,12 +368,12 @@ struct LocationPlayerView: View {
                     )
                 )
                 .font(.caption.monospacedDigit())
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
             }
         }
         .padding()
         .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private func routeDetails(route: SavedRoute) -> some View {
@@ -455,12 +419,7 @@ struct LocationPlayerView: View {
                 },
                 set: { selection in
                     updateRouteDraft { route in
-                        switch selection {
-                        case 0:
-                            route.updateMode = .interval(seconds: 1)
-                        default:
-                            route.updateMode = .distance(meters: 10)
-                        }
+                        route.updateMode = selection == 0 ? .interval(seconds: 1) : .distance(meters: 10)
                     }
                 }
             )) {
@@ -512,7 +471,7 @@ struct LocationPlayerView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(L10n.f("Direct edit is limited to the first %d waypoints.", inlineWaypointEditingLimit))
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                         if let first = waypoints.first, let last = waypoints.last {
                             Text(
                                 String(
@@ -522,11 +481,11 @@ struct LocationPlayerView: View {
                                 )
                             )
                             .font(.caption.monospacedDigit())
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                         }
                         Text(L10n.f("+ %d additional waypoints hidden in direct editor.", hiddenWaypointCount))
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -565,23 +524,23 @@ struct LocationPlayerView: View {
         }
         .padding()
         .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private var playbackControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             if !viewModel.hasTargetDevice {
                 Text(L10n.t("No target simulator selected."))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             } else if !viewModel.isDeviceBooted, viewModel.autoBootOnSend {
                 Text(L10n.t("Selected simulator is shutdown. Actions will boot it automatically."))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             } else if !viewModel.isDeviceBooted {
                 Text(L10n.t("Selected simulator is shutdown."))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
 
             if !isRouteSelection {
@@ -597,23 +556,20 @@ struct LocationPlayerView: View {
                     Button(L10n.t("Clear Location")) {
                         viewModel.clearAppliedLocation()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
+                    .buttonStyle(.bordered)
                     .disabled(!viewModel.hasTargetDevice)
 
                     Button(L10n.t("Reset To Default Location")) {
                         flushLocationDraftSave()
                         viewModel.resetToDefaultLocation()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.blue)
+                    .buttonStyle(.bordered)
                     .disabled(!viewModel.hasTargetDevice || viewModel.defaultLocationID == nil)
 
                     Spacer()
-
                     Text(L10n.t("Single location mode"))
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
             } else {
                 HStack {
@@ -628,94 +584,31 @@ struct LocationPlayerView: View {
                     Button(pauseButtonTitle) {
                         viewModel.togglePauseResume()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(pauseResumeButtonTint)
+                    .buttonStyle(.bordered)
                     .disabled(isPauseDisabled)
 
                     Button(L10n.t("Stop")) {
                         viewModel.stop()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
+                    .buttonStyle(.bordered)
                     .disabled(isStopDisabled)
 
                     Spacer()
 
                     Text(routeStatusText)
                         .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            GroupBox {
-                DisclosureGroup(isExpanded: $isDebugLogExpanded) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Button(L10n.t("Copy Log")) {
-                                copyDebugLogToClipboard()
-                            }
-                            .disabled(viewModel.debugLogText.isEmpty)
-
-                            Button(L10n.t("Clear Log")) {
-                                viewModel.clearDebugLog()
-                            }
-
-                            Button(L10n.t("Refresh")) {
-                                viewModel.refreshDebugLog()
-                            }
-
-                            Spacer()
-                        }
-
-                        ScrollView {
-                            Text(viewModel.debugLogText.isEmpty ? L10n.t("No debug entries yet.") : viewModel.debugLogText)
-                                .font(.system(.caption, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                        }
-                        .frame(minHeight: 90, maxHeight: 130)
-                        .padding(6)
-                        .background(Color(NSColor.textBackgroundColor))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                        )
-                        .cornerRadius(6)
-                    }
-                } label: {
-                    HStack {
-                        Text(L10n.t("Debug Log"))
-                        Spacer()
-                        Text(L10n.f("%d lines", viewModel.debugLogLineCount))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                        .foregroundStyle(.secondary)
                 }
             }
         }
-        .padding()
+        .padding(16)
     }
 
     private var isRouteSelection: Bool {
         librarySelection?.routeID != nil
     }
 
-    private var canPauseResume: Bool {
-        guard isRouteSelection else {
-            return false
-        }
-        switch viewModel.playbackState {
-        case .running, .paused:
-            return true
-        default:
-            return false
-        }
-    }
-
     private var pauseButtonTitle: String {
-        guard isRouteSelection else {
-            return L10n.t("Pause")
-        }
         switch viewModel.playbackState {
         case .running:
             return L10n.t("Pause")
@@ -723,15 +616,6 @@ struct LocationPlayerView: View {
             return L10n.t("Resume")
         default:
             return L10n.t("Pause/Resume")
-        }
-    }
-
-    private var pauseResumeButtonTint: Color {
-        switch viewModel.playbackState {
-        case .paused:
-            return .blue
-        default:
-            return .orange
         }
     }
 
@@ -755,7 +639,7 @@ struct LocationPlayerView: View {
     }
 
     private var isPauseDisabled: Bool {
-        !viewModel.hasTargetDevice || !canPauseResume
+        !viewModel.hasTargetDevice || !viewModel.hasRunningSession
     }
 
     private var isStopDisabled: Bool {
@@ -897,52 +781,56 @@ struct LocationPlayerView: View {
             ?? viewModel.locations.first?.point
             ?? GeoPoint(lat: 37.3349, lon: -122.0090)
 
-        openCoordinatePickerWindow(MapPickerContext(
-            mode: .addLocation,
-            title: L10n.t("Choose Location Point"),
-            subtitle: L10n.t("Click on the map to place the new saved location."),
-            initialPoint: initialPoint,
-            existingWaypoints: []
-        ))
+        openCoordinatePickerWindow(
+            MapPickerContext(
+                mode: .addLocation,
+                title: L10n.t("Choose Location Point"),
+                subtitle: L10n.t("Click on the map to place the new saved location."),
+                initialPoint: initialPoint,
+                existingWaypoints: []
+            )
+        )
     }
 
     private func openLocationEditMapPicker(_ location: SavedLocation) {
-        openCoordinatePickerWindow(MapPickerContext(
-            mode: .editLocation(locationID: location.id),
-            title: L10n.t("Edit Location Point"),
-            subtitle: L10n.t("Click on the map to move this location."),
-            initialPoint: location.point,
-            existingWaypoints: []
-        ))
+        openCoordinatePickerWindow(
+            MapPickerContext(
+                mode: .editLocation(locationID: location.id),
+                title: L10n.t("Edit Location Point"),
+                subtitle: L10n.t("Click on the map to move this location."),
+                initialPoint: location.point,
+                existingWaypoints: []
+            )
+        )
     }
 
     private func openWaypointMapPicker() {
         let existingWaypoints = routeDraft?.waypoints ?? []
         guard existingWaypoints.count <= mapWaypointEditingLimit else {
-            viewModel.errorMessage = L10n.f(
-                "Map waypoint editor supports up to %d waypoints. Reduce route size first.",
-                mapWaypointEditingLimit
+            viewModel.feedback = FeedbackMessage(
+                level: .warning,
+                text: L10n.f(
+                    "Map waypoint editor supports up to %d waypoints. Reduce route size first.",
+                    mapWaypointEditingLimit
+                )
             )
             return
         }
+
         let initialPoint = existingWaypoints.last
             ?? locationDraft?.point
             ?? viewModel.locations.first?.point
             ?? GeoPoint(lat: 37.3349, lon: -122.0090)
 
-        openCoordinatePickerWindow(MapPickerContext(
-            mode: .editWaypoints,
-            title: L10n.t("Edit Waypoints"),
-            subtitle: L10n.t("Select a waypoint to move, or add a new one by clicking on the map."),
-            initialPoint: initialPoint,
-            existingWaypoints: existingWaypoints
-        ))
-    }
-
-    private func copyDebugLogToClipboard() {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(viewModel.debugLogShareText, forType: .string)
+        openCoordinatePickerWindow(
+            MapPickerContext(
+                mode: .editWaypoints,
+                title: L10n.t("Edit Waypoints"),
+                subtitle: L10n.t("Select a waypoint to move, or add a new one by clicking on the map."),
+                initialPoint: initialPoint,
+                existingWaypoints: existingWaypoints
+            )
+        )
     }
 
     private func beginGPXRouteImport() {
@@ -957,14 +845,14 @@ struct LocationPlayerView: View {
 
     private func beginLibraryExport() {
         guard let data = viewModel.exportLibraryData() else { return }
-        libraryExportDocument = LocationLibraryDocument(data: data)
+        libraryExportDocument = LocationLibraryTransferDocument(data: data)
         showLibraryExporter = true
     }
 
     private func openCoordinatePickerWindow(_ context: MapPickerContext) {
         LocationPlayerAuxWindowCoordinator.shared.present(
             kind: .mapEditor,
-            ownerWindowIdentifier: locationPlayerWindowIdentifier,
+            ownerWindowIdentifier: locationSimulationWindowIdentifier,
             title: context.title,
             parentWindow: owningWindow
         ) { close in
@@ -1004,16 +892,12 @@ struct LocationPlayerView: View {
     private func openLibraryImportSelectionWindow(library: LocationLibrary) {
         LocationPlayerAuxWindowCoordinator.shared.present(
             kind: .importSelection,
-            ownerWindowIdentifier: locationPlayerWindowIdentifier,
+            ownerWindowIdentifier: locationSimulationWindowIdentifier,
             title: L10n.t("Import Selection"),
             parentWindow: owningWindow
         ) { close in
-            LibraryImportSelectionSheet(library: library, onClose: close) { selectedLocationIDs, selectedRouteIDs in
-                viewModel.importSelection(
-                    locationIDs: selectedLocationIDs,
-                    routeIDs: selectedRouteIDs,
-                    from: library
-                )
+            LibraryImportSelectionView(library: library, onClose: close) { selectedLocationIDs, selectedRouteIDs in
+                viewModel.importSelection(locationIDs: selectedLocationIDs, routeIDs: selectedRouteIDs, from: library)
                 syncSelectionFromViewModel()
             }
         }
@@ -1022,12 +906,12 @@ struct LocationPlayerView: View {
     private func openGPXPreviewWindow(preview: GPXImportPreview) {
         LocationPlayerAuxWindowCoordinator.shared.present(
             kind: .gpxPreview,
-            ownerWindowIdentifier: locationPlayerWindowIdentifier,
+            ownerWindowIdentifier: locationSimulationWindowIdentifier,
             title: L10n.t("Import GPX"),
             parentWindow: owningWindow
         ) { close in
-            GPXImportPreviewSheet(preview: preview, onClose: close) { selectedTimeRange, selectedPointRange in
-                viewModel.importRoute(
+            GPXImportPreviewWindowView(preview: preview, onClose: close) { selectedTimeRange, selectedPointRange in
+                _ = viewModel.importRoute(
                     from: preview,
                     selectedTimeRange: selectedTimeRange,
                     selectedPointRange: selectedPointRange
@@ -1049,9 +933,6 @@ struct LocationPlayerView: View {
 
     @ViewBuilder
     private func locationContextMenu(for location: SavedLocation) -> some View {
-        Button(L10n.t("Rename"), systemImage: "pencil") {
-            beginRenameLocation(location.id)
-        }
         Button(L10n.t("Set Default"), systemImage: "star") {
             selectLocationForLibraryAction(location.id)
             viewModel.setDefaultLocationToSelection()
@@ -1066,46 +947,11 @@ struct LocationPlayerView: View {
 
     @ViewBuilder
     private func routeContextMenu(for route: SavedRoute) -> some View {
-        Button(L10n.t("Rename"), systemImage: "pencil") {
-            beginRenameRoute(route.id)
-        }
-        Divider()
         Button(L10n.t("Delete"), systemImage: "trash", role: .destructive) {
             selectRouteForLibraryAction(route.id)
             viewModel.deleteSelectedRoute()
             syncSelectionFromViewModel()
         }
-    }
-
-    private func processPendingMenuCommand() {
-        guard let command = LocationPlayerMenuCommandCenter.shared.consumeCommand(
-            for: locationPlayerWindowIdentifier
-        ) else {
-            return
-        }
-
-        switch command {
-        case .importGPXRoute:
-            beginGPXRouteImport()
-        case .importLibraryJSON:
-            beginLibraryImport()
-        case .exportLibraryJSON:
-            beginLibraryExport()
-        }
-    }
-
-    private func beginRenameLocation(_ locationID: UUID) {
-        flushLocationDraftSave()
-        selectLocationForLibraryAction(locationID)
-        guard let location = viewModel.locations.first(where: { $0.id == locationID }) else { return }
-        renameContext = RenameContext(item: .location(location.id), currentName: location.name)
-    }
-
-    private func beginRenameRoute(_ routeID: UUID) {
-        flushRouteDraftSave()
-        selectRouteForLibraryAction(routeID)
-        guard let route = viewModel.routes.first(where: { $0.id == routeID }) else { return }
-        renameContext = RenameContext(item: .route(route.id), currentName: route.name)
     }
 
     private var libraryExportFilename: String {
@@ -1127,688 +973,39 @@ private struct LocationPreviewMap: NSViewRepresentable {
 
     func makeNSView(context: Context) -> MKMapView {
         let mapView = MKMapView(frame: .zero)
-        mapView.mapType = .hybrid
-        mapView.showsCompass = true
-        mapView.showsScale = false
+        mapView.isRotateEnabled = false
+        mapView.showsCompass = false
         mapView.showsZoomControls = true
-        mapView.register(MKMarkerAnnotationView.self, forAnnotationViewWithReuseIdentifier: Coordinator.annotationReuseIdentifier)
-        mapView.delegate = context.coordinator
+        mapView.preferredConfiguration = MKHybridMapConfiguration()
+        updateMapView(mapView, coordinator: context.coordinator)
         return mapView
     }
 
     func updateNSView(_ mapView: MKMapView, context: Context) {
-        let coordinate = CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon)
-        let markerTitle = resolvedTitle
-        let previewKey = Self.previewKey(locationID: locationID, point: point)
+        updateMapView(mapView, coordinator: context.coordinator)
+    }
 
-        let annotation: MKPointAnnotation
-        if let existingAnnotation = context.coordinator.annotation {
-            annotation = existingAnnotation
-        } else {
-            let newAnnotation = MKPointAnnotation()
-            context.coordinator.annotation = newAnnotation
-            mapView.addAnnotation(newAnnotation)
-            annotation = newAnnotation
-        }
+    private func updateMapView(_ mapView: MKMapView, coordinator: Coordinator) {
+        let previewKey = "\(locationID.uuidString)|\(point.lat)|\(point.lon)|\(title)"
+        if coordinator.lastPreviewKey != previewKey {
+            mapView.removeAnnotations(mapView.annotations)
 
-        if annotation.title != markerTitle {
-            annotation.title = markerTitle
-        }
+            let annotation = MKPointAnnotation()
+            annotation.coordinate = CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon)
+            annotation.title = title
+            mapView.addAnnotation(annotation)
 
-        if annotation.coordinate.latitude != coordinate.latitude
-            || annotation.coordinate.longitude != coordinate.longitude {
-            annotation.coordinate = coordinate
-        }
-
-        if context.coordinator.lastPreviewKey != previewKey {
-            mapView.setRegion(Self.region(for: point), animated: false)
-            context.coordinator.lastPreviewKey = previewKey
+            let region = MKCoordinateRegion(
+                center: annotation.coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+            )
+            mapView.setRegion(region, animated: false)
+            coordinator.lastPreviewKey = previewKey
         }
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
-        static let annotationReuseIdentifier = "LocationPreviewPin"
-
-        var annotation: MKPointAnnotation?
         var lastPreviewKey: String?
-
-        func mapView(
-            _ mapView: MKMapView,
-            viewFor annotation: MKAnnotation
-        ) -> MKAnnotationView? {
-            guard !(annotation is MKUserLocation) else { return nil }
-            let view = mapView.dequeueReusableAnnotationView(
-                withIdentifier: Self.annotationReuseIdentifier,
-                for: annotation
-            ) as? MKMarkerAnnotationView
-            view?.markerTintColor = .systemRed
-            view?.glyphImage = NSImage(systemSymbolName: "mappin", accessibilityDescription: nil)
-            return view
-        }
-    }
-
-    private var resolvedTitle: String {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? L10n.t("Selected Location") : trimmed
-    }
-
-    private static func previewKey(locationID: UUID, point: GeoPoint) -> String {
-        let lat = String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), point.lat)
-        let lon = String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), point.lon)
-        return "\(locationID.uuidString)-\(lat)-\(lon)"
-    }
-
-    private static func region(for point: GeoPoint) -> MKCoordinateRegion {
-        MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon),
-            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-        )
-    }
-}
-
-private struct RenameContext: Identifiable {
-    enum Item {
-        case location(UUID)
-        case route(UUID)
-    }
-
-    let id = UUID()
-    let item: Item
-    let currentName: String
-
-    var title: String {
-        switch item {
-        case .location:
-            return L10n.t("Rename Location")
-        case .route:
-            return L10n.t("Rename Route")
-        }
-    }
-}
-
-private struct RenameItemSheet: View {
-    @Environment(\.dismiss) private var dismiss
-
-    let title: String
-    let initialName: String
-    let onConfirm: (String) -> Void
-
-    @State private var name: String
-
-    init(title: String, initialName: String, onConfirm: @escaping (String) -> Void) {
-        self.title = title
-        self.initialName = initialName
-        self.onConfirm = onConfirm
-        _name = State(initialValue: initialName)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.headline)
-
-            TextField(L10n.t("Name"), text: $name)
-                .textFieldStyle(.roundedBorder)
-
-            HStack {
-                Spacer()
-                Button(L10n.t("Cancel")) {
-                    dismiss()
-                }
-                Button(L10n.t("Save")) {
-                    onConfirm(name)
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding()
-        .frame(width: 360)
-    }
-}
-
-private struct GPXImportPreviewSheet: View {
-    @Environment(\.dismiss) private var dismiss
-
-    let preview: GPXImportPreview
-    let onClose: (() -> Void)?
-    let onImport: (ClosedRange<Date>?, ClosedRange<Int>?) -> Void
-
-    @State private var selectedStartFraction: Double
-    @State private var selectedEndFraction: Double
-    @State private var cameraPosition: MapCameraPosition
-    @State private var visibleRegion: MKCoordinateRegion
-
-    init(
-        preview: GPXImportPreview,
-        onClose: (() -> Void)? = nil,
-        onImport: @escaping (ClosedRange<Date>?, ClosedRange<Int>?) -> Void
-    ) {
-        self.preview = preview
-        self.onClose = onClose
-        self.onImport = onImport
-
-        let defaultRegion = GPXImportPreviewSheet.mapRegion(for: preview.points.map(\.point))
-        _cameraPosition = State(initialValue: .region(defaultRegion))
-        _visibleRegion = State(initialValue: defaultRegion)
-        _selectedStartFraction = State(initialValue: 0)
-        _selectedEndFraction = State(initialValue: 1)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(L10n.t("Import GPX"))
-                .font(.headline)
-            Text(preview.name)
-                .font(.title3)
-            Text(summaryText)
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Map(position: $cameraPosition, interactionModes: [.zoom, .pan]) {
-                if allCoordinates.count > 1 {
-                    MapPolyline(coordinates: allCoordinates)
-                        .stroke(Color.secondary.opacity(0.45), lineWidth: 2)
-                }
-
-                if selectedCoordinates.count > 1 {
-                    MapPolyline(coordinates: selectedCoordinates)
-                        .stroke(.blue, lineWidth: 4)
-                }
-
-                if let first = selectedCoordinates.first {
-                    Marker(L10n.t("Start"), coordinate: first)
-                        .tint(.green)
-                }
-
-                if let last = selectedCoordinates.last {
-                    Marker(L10n.t("End"), coordinate: last)
-                        .tint(.red)
-                }
-            }
-            .mapStyle(.hybrid(elevation: .realistic))
-            .onMapCameraChange(frequency: .continuous) { context in
-                visibleRegion = context.region
-            }
-            .overlay(alignment: .topTrailing) {
-                mapZoomControls
-            }
-            .frame(minHeight: 360)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(preview.canSelectTimeRange ? L10n.t("Time Range") : L10n.t("Waypoint Range"))
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-
-                GPXTimelineRangeSelector(
-                    startFraction: $selectedStartFraction,
-                    endFraction: $selectedEndFraction
-                )
-                .frame(height: 36)
-
-                HStack {
-                    Text(selectedRangeStartText)
-                    Spacer()
-                    Text(selectedRangeEndText)
-                }
-                .font(.caption.monospacedDigit())
-                .foregroundColor(.secondary)
-            }
-
-            Text(selectionSummaryText)
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            if !canImportSelection {
-                Text(L10n.t("At least two points are required in the selected range."))
-                    .font(.caption)
-                    .foregroundColor(.red)
-            }
-
-            HStack {
-                Spacer()
-                Button(L10n.t("Cancel")) {
-                    close()
-                }
-                Button(L10n.t("Import Selection")) {
-                    onImport(
-                        preview.canSelectTimeRange ? selectedTimeRange : nil,
-                        preview.canSelectTimeRange ? nil : selectedPointRange
-                    )
-                    close()
-                }
-                .disabled(!canImportSelection)
-            }
-        }
-        .padding()
-        .frame(minWidth: 820, minHeight: 700)
-    }
-
-    private var selectedTimeRange: ClosedRange<Date>? {
-        guard let fullTimeRange = preview.timeRange else { return nil }
-        let duration = fullTimeRange.upperBound.timeIntervalSince(fullTimeRange.lowerBound)
-        guard duration > 0 else { return nil }
-        let lower = fullTimeRange.lowerBound.addingTimeInterval(duration * selectedStartFraction)
-        let upper = fullTimeRange.lowerBound.addingTimeInterval(duration * selectedEndFraction)
-        return lower...upper
-    }
-
-    private var selectedPointRange: ClosedRange<Int>? {
-        guard !preview.points.isEmpty else { return nil }
-        let maxIndex = preview.points.count - 1
-        let lower = Int(floor(selectedStartFraction * Double(maxIndex)))
-        let upper = Int(ceil(selectedEndFraction * Double(maxIndex)))
-        let clampedLower = max(0, min(maxIndex, lower))
-        let clampedUpper = max(clampedLower, min(maxIndex, upper))
-        return clampedLower...clampedUpper
-    }
-
-    private var selectedPoints: [GPXTimestampedPoint] {
-        if let selectedTimeRange {
-            return preview.points(in: selectedTimeRange)
-        }
-        if let selectedPointRange {
-            return preview.points(in: selectedPointRange)
-        }
-        return preview.points
-    }
-
-    private var allCoordinates: [CLLocationCoordinate2D] {
-        preview.points.map { point in
-            CLLocationCoordinate2D(latitude: point.point.lat, longitude: point.point.lon)
-        }
-    }
-
-    private var selectedCoordinates: [CLLocationCoordinate2D] {
-        selectedPoints.map { point in
-            CLLocationCoordinate2D(latitude: point.point.lat, longitude: point.point.lon)
-        }
-    }
-
-    private var canImportSelection: Bool {
-        selectedPoints.count >= 2
-    }
-
-    private var summaryText: String {
-        if let fullTimeRange = preview.timeRange {
-            let duration = fullTimeRange.upperBound.timeIntervalSince(fullTimeRange.lowerBound)
-            return L10n.f("%d points, duration: %@", preview.totalPointCount, formattedDuration(duration))
-        }
-        return L10n.f("%d points (without timestamps)", preview.totalPointCount)
-    }
-
-    private var selectionSummaryText: String {
-        let base = L10n.f("%d of %d points in import range", selectedPoints.count, preview.totalPointCount)
-        if let selectedTimeRange {
-            let duration = selectedTimeRange.upperBound.timeIntervalSince(selectedTimeRange.lowerBound)
-            return "\(base) (\(formattedDuration(duration)))"
-        }
-        if let selectedPointRange {
-            return L10n.f(
-                "%@ (WP %d-%d)",
-                base,
-                selectedPointRange.lowerBound + 1,
-                selectedPointRange.upperBound + 1
-            )
-        }
-        return base
-    }
-
-    private var selectedRangeStartText: String {
-        if let selectedTimeRange {
-            return formattedDate(selectedTimeRange.lowerBound)
-        }
-        if let selectedPointRange {
-            return L10n.f("WP %d", selectedPointRange.lowerBound + 1)
-        }
-        return L10n.t("WP 1")
-    }
-
-    private var selectedRangeEndText: String {
-        if let selectedTimeRange {
-            return formattedDate(selectedTimeRange.upperBound)
-        }
-        if let selectedPointRange {
-            return L10n.f("WP %d", selectedPointRange.upperBound + 1)
-        }
-        return L10n.t("WP 1")
-    }
-
-    private var mapZoomControls: some View {
-        VStack(spacing: 8) {
-            Button {
-                zoomMap(by: 0.5)
-            } label: {
-                Image(systemName: "plus")
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.borderedProminent)
-            .help(L10n.t("Zoom in"))
-
-            Button {
-                zoomMap(by: 2.0)
-            } label: {
-                Image(systemName: "minus")
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.bordered)
-            .help(L10n.t("Zoom out"))
-        }
-        .padding(10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .padding(12)
-    }
-
-    private func zoomMap(by factor: Double) {
-        let minDelta = 0.0005
-        let maxDelta = 120.0
-
-        var region = visibleRegion
-        region.span.latitudeDelta = min(max(region.span.latitudeDelta * factor, minDelta), maxDelta)
-        region.span.longitudeDelta = min(max(region.span.longitudeDelta * factor, minDelta), maxDelta)
-        visibleRegion = region
-        cameraPosition = .region(region)
-    }
-
-    private func formattedDate(_ date: Date?) -> String {
-        guard let date else { return L10n.t("n/a") }
-        return Self.dateFormatter.string(from: date)
-    }
-
-    private func formattedDuration(_ duration: TimeInterval) -> String {
-        let resolved = max(0, duration)
-        return Self.durationFormatter.string(from: resolved) ?? String(format: L10n.t("%.0fs"), resolved)
-    }
-
-    private static func mapRegion(for points: [GeoPoint]) -> MKCoordinateRegion {
-        guard let first = points.first else {
-            return MKCoordinateRegion(
-                center: CLLocationCoordinate2D(latitude: 37.3349, longitude: -122.0090),
-                span: MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.08)
-            )
-        }
-
-        let latitudes = points.map(\.lat)
-        let longitudes = points.map(\.lon)
-        let minLat = latitudes.min() ?? first.lat
-        let maxLat = latitudes.max() ?? first.lat
-        let minLon = longitudes.min() ?? first.lon
-        let maxLon = longitudes.max() ?? first.lon
-
-        let center = CLLocationCoordinate2D(
-            latitude: (minLat + maxLat) / 2,
-            longitude: (minLon + maxLon) / 2
-        )
-
-        let latDelta = max((maxLat - minLat) * 1.25, 0.01)
-        let lonDelta = max((maxLon - minLon) * 1.25, 0.01)
-
-        return MKCoordinateRegion(
-            center: center,
-            span: MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: lonDelta)
-        )
-    }
-
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .medium
-        return formatter
-    }()
-
-    private static let durationFormatter: DateComponentsFormatter = {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.hour, .minute, .second]
-        formatter.unitsStyle = .abbreviated
-        formatter.zeroFormattingBehavior = [.dropLeading]
-        return formatter
-    }()
-
-    private func close() {
-        if let onClose {
-            onClose()
-        } else {
-            dismiss()
-        }
-    }
-}
-
-private struct GPXTimelineRangeSelector: View {
-    @Binding var startFraction: Double
-    @Binding var endFraction: Double
-
-    @State private var startDragOrigin: Double?
-    @State private var endDragOrigin: Double?
-    @State private var rangeDragOrigin: (Double, Double)?
-
-    private let handleDiameter: CGFloat = 16
-
-    var body: some View {
-        GeometryReader { geometry in
-            let trackWidth = max(1, geometry.size.width - handleDiameter)
-            let startX = CGFloat(startFraction) * trackWidth + (handleDiameter / 2)
-            let endX = CGFloat(endFraction) * trackWidth + (handleDiameter / 2)
-            let selectedWidth = max(endX - startX, handleDiameter / 2)
-            let selectedMidX = startX + (selectedWidth / 2)
-
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.secondary.opacity(0.2))
-                    .frame(height: 8)
-                    .padding(.horizontal, handleDiameter / 2)
-
-                Capsule()
-                    .fill(Color.accentColor.opacity(0.5))
-                    .frame(width: selectedWidth, height: 8)
-                    .position(x: selectedMidX, y: geometry.size.height / 2)
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                if rangeDragOrigin == nil {
-                                    rangeDragOrigin = (startFraction, endFraction)
-                                }
-
-                                guard let origin = rangeDragOrigin else { return }
-                                let delta = Double(value.translation.width / trackWidth)
-                                let span = origin.1 - origin.0
-                                let minStart = 0.0
-                                let maxStart = 1.0 - span
-                                let clampedStart = min(max(origin.0 + delta, minStart), maxStart)
-                                startFraction = clampedStart
-                                endFraction = clampedStart + span
-                            }
-                            .onEnded { _ in
-                                rangeDragOrigin = nil
-                            }
-                    )
-
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: handleDiameter, height: handleDiameter)
-                    .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
-                    .position(x: startX, y: geometry.size.height / 2)
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                if startDragOrigin == nil {
-                                    startDragOrigin = startFraction
-                                }
-
-                                guard let origin = startDragOrigin else { return }
-                                let delta = Double(value.translation.width / trackWidth)
-                                startFraction = min(max(origin + delta, 0), endFraction)
-                            }
-                            .onEnded { _ in
-                                startDragOrigin = nil
-                            }
-                    )
-
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: handleDiameter, height: handleDiameter)
-                    .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
-                    .position(x: endX, y: geometry.size.height / 2)
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                if endDragOrigin == nil {
-                                    endDragOrigin = endFraction
-                                }
-
-                                guard let origin = endDragOrigin else { return }
-                                let delta = Double(value.translation.width / trackWidth)
-                                endFraction = max(min(origin + delta, 1), startFraction)
-                            }
-                            .onEnded { _ in
-                                endDragOrigin = nil
-                            }
-                    )
-            }
-        }
-    }
-}
-
-private struct LocationLibraryDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json] }
-
-    var data: Data
-
-    init(data: Data) {
-        self.data = data
-    }
-
-    init(configuration: ReadConfiguration) throws {
-        self.data = configuration.file.regularFileContents ?? Data()
-    }
-
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: data)
-    }
-}
-
-private struct LibraryImportSelectionSheet: View {
-    @Environment(\.dismiss) private var dismiss
-
-    let library: LocationLibrary
-    let onClose: (() -> Void)?
-    let onImport: (Set<UUID>, Set<UUID>) -> Void
-
-    @State private var selectedLocationIDs: Set<UUID>
-    @State private var selectedRouteIDs: Set<UUID>
-
-    init(
-        library: LocationLibrary,
-        onClose: (() -> Void)? = nil,
-        onImport: @escaping (Set<UUID>, Set<UUID>) -> Void
-    ) {
-        self.library = library
-        self.onClose = onClose
-        self.onImport = onImport
-        _selectedLocationIDs = State(initialValue: Set(library.locations.map(\.id)))
-        _selectedRouteIDs = State(initialValue: Set(library.routes.map(\.id)))
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(L10n.t("Import Selection"))
-                .font(.headline)
-            Text(L10n.t("Choose which locations and routes should be imported."))
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            GroupBox(L10n.f("Locations (%d/%d)", selectedLocationIDs.count, library.locations.count)) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Button(L10n.t("All")) {
-                            selectedLocationIDs = Set(library.locations.map(\.id))
-                        }
-                        Button(L10n.t("None")) {
-                            selectedLocationIDs.removeAll()
-                        }
-                    }
-
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 6) {
-                            ForEach(library.locations) { location in
-                                Toggle(
-                                    location.name,
-                                    isOn: Binding(
-                                        get: { selectedLocationIDs.contains(location.id) },
-                                        set: { isOn in
-                                            if isOn {
-                                                selectedLocationIDs.insert(location.id)
-                                            } else {
-                                                selectedLocationIDs.remove(location.id)
-                                            }
-                                        }
-                                    )
-                                )
-                                .toggleStyle(.checkbox)
-                            }
-                        }
-                    }
-                    .frame(height: 140)
-                }
-            }
-
-            GroupBox(L10n.f("Routes (%d/%d)", selectedRouteIDs.count, library.routes.count)) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Button(L10n.t("All")) {
-                            selectedRouteIDs = Set(library.routes.map(\.id))
-                        }
-                        Button(L10n.t("None")) {
-                            selectedRouteIDs.removeAll()
-                        }
-                    }
-
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 6) {
-                            ForEach(library.routes) { route in
-                                Toggle(
-                                    route.name,
-                                    isOn: Binding(
-                                        get: { selectedRouteIDs.contains(route.id) },
-                                        set: { isOn in
-                                            if isOn {
-                                                selectedRouteIDs.insert(route.id)
-                                            } else {
-                                                selectedRouteIDs.remove(route.id)
-                                            }
-                                        }
-                                    )
-                                )
-                                .toggleStyle(.checkbox)
-                            }
-                        }
-                    }
-                    .frame(height: 140)
-                }
-            }
-
-            HStack {
-                Spacer()
-                Button(L10n.t("Cancel")) {
-                    close()
-                }
-                Button(L10n.t("Import Selection")) {
-                    onImport(selectedLocationIDs, selectedRouteIDs)
-                    close()
-                }
-                .disabled(selectedLocationIDs.isEmpty && selectedRouteIDs.isEmpty)
-            }
-        }
-        .padding()
-        .frame(minWidth: 520, minHeight: 520)
-    }
-
-    private func close() {
-        if let onClose {
-            onClose()
-        } else {
-            dismiss()
-        }
     }
 }
 
@@ -1852,6 +1049,7 @@ private struct CoordinatePickerSheet: View {
     @State private var searchQuery: String
     @State private var searchStatusMessage: String?
     @State private var isSearching: Bool
+
     private let minVisibleWaypointBadges = 100
     private let maxDraggableWaypointBadges = 140
     private let detailZoomThresholdDelta = 0.008
@@ -1885,15 +1083,13 @@ private struct CoordinatePickerSheet: View {
         _searchQuery = State(initialValue: "")
         _searchStatusMessage = State(initialValue: nil)
         _isSearching = State(initialValue: false)
-        if case .addLocation = mode {
+
+        switch mode {
+        case .addLocation, .editLocation:
             _selectedCoordinate = State(
                 initialValue: CLLocationCoordinate2D(latitude: initialPoint.lat, longitude: initialPoint.lon)
             )
-        } else if case .editLocation = mode {
-            _selectedCoordinate = State(
-                initialValue: CLLocationCoordinate2D(latitude: initialPoint.lat, longitude: initialPoint.lon)
-            )
-        } else {
+        case .editWaypoints:
             _selectedCoordinate = State(initialValue: nil)
         }
     }
@@ -1906,25 +1102,12 @@ private struct CoordinatePickerSheet: View {
                         .font(.headline)
                     Text(subtitle)
                         .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    HStack(spacing: 8) {
-                        TextField(L10n.t("Search place (e.g. Berlin Central Station)"), text: $searchQuery)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit {
-                                runLocationSearch()
-                            }
-
-                        Button(L10n.t("Search")) {
-                            runLocationSearch()
-                        }
-                        .disabled(searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSearching)
-                    }
+                        .foregroundStyle(.secondary)
 
                     if let searchStatusMessage {
                         Text(searchStatusMessage)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
 
                     MapReader { proxy in
@@ -1972,16 +1155,16 @@ private struct CoordinatePickerSheet: View {
                         .simultaneousGesture(
                             DragGesture(minimumDistance: 0, coordinateSpace: .local)
                                 .onEnded { value in
-                            // Treat short drag as a mouse click so macOS interaction is predictable.
-                            let deltaX = value.location.x - value.startLocation.x
-                            let deltaY = value.location.y - value.startLocation.y
-                            let movedDistance = sqrt((deltaX * deltaX) + (deltaY * deltaY))
-                            guard movedDistance < 4 else { return }
+                                    let deltaX = value.location.x - value.startLocation.x
+                                    let deltaY = value.location.y - value.startLocation.y
+                                    let movedDistance = sqrt((deltaX * deltaX) + (deltaY * deltaY))
+                                    guard movedDistance < 4 else { return }
 
-                            if let coordinate = proxy.convert(value.location, from: .local) {
-                                handleMapTap(coordinate)
-                            }
-                        })
+                                    if let coordinate = proxy.convert(value.location, from: .local) {
+                                        handleMapTap(coordinate)
+                                    }
+                                }
+                        )
                         .overlay(alignment: .topTrailing) {
                             mapZoomControls
                         }
@@ -1995,12 +1178,12 @@ private struct CoordinatePickerSheet: View {
 
                     Text(selectionText)
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
 
                     if let waypointSamplingStatusText {
                         Text(waypointSamplingStatusText)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2032,6 +1215,14 @@ private struct CoordinatePickerSheet: View {
             .padding()
         }
         .frame(minWidth: 760, minHeight: 560)
+        .searchable(
+            text: $searchQuery,
+            placement: .toolbar,
+            prompt: L10n.t("Search place (e.g. Berlin Central Station)")
+        )
+        .onSubmit(of: .search) {
+            runLocationSearch()
+        }
     }
 
     private var selectionText: String {
@@ -2080,7 +1271,6 @@ private struct CoordinatePickerSheet: View {
 
         let currentDelta = max(visibleRegion.span.latitudeDelta, visibleRegion.span.longitudeDelta)
 
-        // Keep rendering aggressively capped for performance until the user is very close.
         if currentDelta >= detailZoomThresholdDelta {
             return minVisibleWaypointBadges
         }
@@ -2240,7 +1430,7 @@ private struct CoordinatePickerSheet: View {
                                 )
                             )
                             .font(.caption.monospacedDigit())
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
 
                             Spacer()
 
@@ -2366,7 +1556,7 @@ private struct CoordinatePickerSheet: View {
         Text("\(index)")
             .font(.caption2)
             .fontWeight(.bold)
-            .foregroundColor(.white)
+            .foregroundStyle(.white)
             .frame(width: 22, height: 22)
             .background(isSelected ? Color.orange : Color.blue)
             .clipShape(Circle())

@@ -1,108 +1,96 @@
 import Foundation
 import Combine
+import AppKit
 
 @MainActor
 final class LocationPlayerViewModel: ObservableObject {
-    @Published var deviceName: String
-    @Published var udid: String
-    @Published var deviceState: DeviceState = .shutdown
-    @Published var availableDevices: [SimDevice] = []
-    @Published var autoBootOnSend: Bool = true
-    @Published var locations: [SavedLocation] = []
-    @Published var routes: [SavedRoute] = []
+    @Published private(set) var deviceName: String
+    @Published private(set) var targetUDID: String
+    @Published private(set) var deviceState: DeviceState = .shutdown
+    @Published var autoBootOnSend: Bool {
+        didSet {
+            UserDefaults.standard.set(autoBootOnSend, forKey: Self.autoBootPreferenceKey)
+        }
+    }
+    @Published private(set) var locations: [SavedLocation] = []
+    @Published private(set) var routes: [SavedRoute] = []
     @Published var selectedLocationID: UUID?
     @Published var selectedRouteID: UUID?
-    @Published var defaultLocationID: UUID?
+    @Published private(set) var defaultLocationID: UUID?
     @Published var playbackState: PlaybackState = .idle
-    @Published var errorMessage: String?
-    @Published var debugLogText: String = ""
+    @Published var feedback: FeedbackMessage?
 
     private let service: SimctlLocationControlling
-    private let libraryStore: LocationLibraryStore
+    private let deviceStore: DeviceStore
+    private let libraryController: LocationLibraryController
+    private var cancellables: Set<AnyCancellable> = []
     private var loaded = false
-    private var debugLogObserver: NSObjectProtocol?
 
     init(
-        udid: String? = nil,
-        initialDeviceName: String? = nil,
-        service: SimctlLocationControlling,
-        libraryStore: LocationLibraryStore
+        targetUDID: String? = nil,
+        deviceStore: DeviceStore,
+        libraryController: LocationLibraryController,
+        service: SimctlLocationControlling
     ) {
-        let resolvedUDID = udid ?? ""
-        self.udid = resolvedUDID
-        self.deviceName = initialDeviceName ?? (resolvedUDID.isEmpty ? L10n.t("No simulator selected") : resolvedUDID)
+        let resolvedUDID = (targetUDID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        self.targetUDID = resolvedUDID
+        self.deviceStore = deviceStore
+        self.libraryController = libraryController
         self.service = service
-        self.libraryStore = libraryStore
+        self.autoBootOnSend = UserDefaults.standard.object(forKey: Self.autoBootPreferenceKey) as? Bool ?? true
+        self.locations = libraryController.locations
+        self.routes = libraryController.routes
+        self.defaultLocationID = libraryController.defaultLocationID
+        self.selectedLocationID = libraryController.locations.first?.id
+        self.deviceName = resolvedUDID.isEmpty ? L10n.t("No simulator selected") : resolvedUDID
 
-        do {
-            let library = try libraryStore.load()
-            self.locations = library.locations
-            self.routes = library.routes
-            self.defaultLocationID = library.defaultLocationID ?? library.locations.first?.id
-            self.selectedLocationID = library.locations.first?.id
-            self.selectedRouteID = nil
-        } catch {
-            let fallback = LocationLibrary.default
-            self.locations = fallback.locations
-            self.routes = fallback.routes
-            self.defaultLocationID = fallback.defaultLocationID ?? fallback.locations.first?.id
-            self.selectedLocationID = fallback.locations.first?.id
-            self.selectedRouteID = nil
-            self.errorMessage = error.localizedDescription
-        }
-
-        updateDebugLogText()
-        debugLogObserver = NotificationCenter.default.addObserver(
-            forName: .routeDebugLogDidChange,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.updateDebugLogText()
-            }
-        }
-        logDebug("Initialized view model for udid=\(resolvedUDID.isEmpty ? "<none>" : resolvedUDID)")
+        bindStores()
+        syncDeviceFromStore()
+        syncSelections()
     }
 
-    convenience init(udid: String? = nil, initialDeviceName: String? = nil) {
+    convenience init(
+        targetUDID: String? = nil,
+        deviceStore: DeviceStore,
+        libraryController: LocationLibraryController
+    ) {
         self.init(
-            udid: udid,
-            initialDeviceName: initialDeviceName,
-            service: SimctlService.shared,
-            libraryStore: .shared
+            targetUDID: targetUDID,
+            deviceStore: deviceStore,
+            libraryController: libraryController,
+            service: SimctlService.shared
         )
     }
 
-    deinit {
-        if let debugLogObserver {
-            NotificationCenter.default.removeObserver(debugLogObserver)
-        }
+    convenience init(
+        udid: String? = nil,
+        initialDeviceName _: String? = nil,
+        service: SimctlLocationControlling,
+        libraryStore: LocationLibraryStore
+    ) {
+        let libraryController = Self.testSupportLibraryController(for: libraryStore)
+        self.init(
+            targetUDID: udid,
+            deviceStore: Self.testSupportDeviceStore,
+            libraryController: libraryController,
+            service: service
+        )
     }
 
-    private func logDebug(_ message: String) {
-        RouteDebugLogStore.shared.log("LocationPlayerViewModel: \(message)")
+    convenience init(udid: String? = nil, initialDeviceName _: String? = nil) {
+        self.init(
+            targetUDID: udid,
+            deviceStore: .shared,
+            libraryController: .shared
+        )
     }
 
-    private func updateDebugLogText() {
-        debugLogText = RouteDebugLogStore.shared.snapshot()
-    }
-
-    var selectedLocationIndex: Int? {
-        guard let selectedLocationID else { return nil }
-        return locations.firstIndex(where: { $0.id == selectedLocationID })
-    }
-
-    var selectedRouteIndex: Int? {
-        guard let selectedRouteID else { return nil }
-        return routes.firstIndex(where: { $0.id == selectedRouteID })
+    var hasTargetDevice: Bool {
+        !targetUDID.isEmpty
     }
 
     var isDeviceBooted: Bool {
         deviceState == .booted
-    }
-
-    var hasTargetDevice: Bool {
-        !udid.isEmpty
     }
 
     var canStopRoute: Bool {
@@ -123,258 +111,52 @@ final class LocationPlayerViewModel: ObservableObject {
         }
     }
 
+    var defaultLocationName: String {
+        libraryController.defaultLocationName
+    }
+
     func start() {
         guard !loaded else { return }
         loaded = true
-        logDebug("start() called, running one-time status refresh for udid=\(udid)")
 
         Task { [weak self] in
-            guard let self else { return }
-            await self.refreshDeviceStatus()
+            await self?.refreshDeviceStatus()
         }
-    }
-
-    func handleWindowClose() {
-        logDebug("handleWindowClose() called for udid=\(udid)")
-        Task { [weak self] in
-            guard let self, self.hasTargetDevice else { return }
-            await self.service.stopRoute(udid: self.udid)
-            self.logDebug("Window close stopRoute finished for udid=\(self.udid)")
-        }
-    }
-
-    func selectTargetDevice(_ selectedUDID: String) {
-        guard !selectedUDID.isEmpty else { return }
-        guard udid != selectedUDID else { return }
-        logDebug("Switching target device from \(udid) to \(selectedUDID)")
-
-        udid = selectedUDID
-        if let selected = availableDevices.first(where: { $0.udid == selectedUDID }) {
-            deviceName = selected.name
-            deviceState = selected.state
-        }
-        playbackState = service.playbackState(udid: selectedUDID)
-        errorMessage = nil
     }
 
     func refreshDeviceStatus() async {
-        do {
-            let response = try await service.fetchDeviceList()
-            var flattenedDevices: [SimDevice] = []
-            for deviceList in response.devices.values {
-                flattenedDevices.append(contentsOf: deviceList)
-            }
-            flattenedDevices.sort { lhs, rhs in
-                if lhs.isBooted != rhs.isBooted {
-                    return lhs.isBooted && !rhs.isBooted
-                }
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-            }
-            availableDevices = flattenedDevices
-
-            if udid.isEmpty || !flattenedDevices.contains(where: { $0.udid == udid }) {
-                if let fallback = flattenedDevices.first(where: { $0.isBooted }) ?? flattenedDevices.first {
-                    udid = fallback.udid
-                } else {
-                    udid = ""
-                    deviceName = L10n.t("No simulator selected")
-                    deviceState = .shutdown
-                    playbackState = .idle
-                    return
-                }
-            }
-
-            guard let selected = flattenedDevices.first(where: { $0.udid == udid }) else {
-                deviceName = L10n.t("No simulator selected")
-                deviceState = .shutdown
-                playbackState = .idle
-                return
-            }
-
-            deviceName = selected.name
-            deviceState = selected.state
-            playbackState = service.playbackState(udid: udid)
-
-            if selected.state != .booted, hasRunningSession {
-                await service.stopRoute(udid: udid)
-                playbackState = service.playbackState(udid: udid)
-                errorMessage = L10n.t("The simulator is no longer booted. Playback was stopped.")
-                logDebug("Stopped playback because simulator is no longer booted (udid=\(udid))")
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-            logDebug("refreshDeviceStatus failed for udid=\(udid): \(error.localizedDescription)")
-        }
-    }
-
-    private func ensureTargetDeviceBootedForSend() async throws {
-        logDebug("ensureTargetDeviceBootedForSend() start for udid=\(udid), isBooted=\(isDeviceBooted), autoBoot=\(autoBootOnSend)")
-        guard hasTargetDevice else {
-            throw SimctlError.commandFailed(L10n.t("Select a target simulator in the Location Player first."))
-        }
-
-        guard !isDeviceBooted else { return }
-
-        guard autoBootOnSend else {
-            throw SimctlError.commandFailed(L10n.t("Selected simulator is shutdown. Enable Auto-Boot or boot it manually."))
-        }
-
-        do {
-            try await service.bootDevice(udid: udid)
-            logDebug("bootDevice command sent for udid=\(udid)")
-        } catch {
-            // Boot may race with an already in-progress boot. Verify state before failing.
-            await refreshDeviceStatus()
-            if !isDeviceBooted {
-                logDebug("bootDevice failed and simulator is still not booted for udid=\(udid): \(error.localizedDescription)")
-                throw error
-            }
-            logDebug("bootDevice returned error but device is already booted for udid=\(udid)")
-        }
-
-        let bootDeadline = Date().addingTimeInterval(30)
-        while Date() < bootDeadline {
-            await refreshDeviceStatus()
-            if isDeviceBooted {
-                logDebug("Simulator boot confirmed for udid=\(udid)")
-                return
-            }
-            try? await Task.sleep(nanoseconds: 500_000_000)
-        }
-
-        logDebug("Boot timeout reached for udid=\(udid)")
-        throw SimctlError.commandFailed(L10n.t("Failed to boot selected simulator within timeout."))
-    }
-
-    func saveLibrary() {
-        do {
-            try libraryStore.save(
-                LocationLibrary(
-                    locations: locations,
-                    routes: routes,
-                    defaultLocationID: defaultLocationID
-                )
-            )
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func exportLibraryData() -> Data? {
-        do {
-            return try libraryStore.encodeLibrary(
-                LocationLibrary(
-                    locations: locations,
-                    routes: routes,
-                    defaultLocationID: defaultLocationID
-                )
-            )
-        } catch {
-            errorMessage = error.localizedDescription
-            return nil
-        }
-    }
-
-    func importLibrary(from fileURL: URL) -> LocationLibrary? {
-        errorMessage = nil
-
-        let hasSecurityScope = fileURL.startAccessingSecurityScopedResource()
-        defer {
-            if hasSecurityScope {
-                fileURL.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        do {
-            let data = try Data(contentsOf: fileURL)
-            return try libraryStore.decodeLibrary(from: data)
-        } catch {
-            errorMessage = error.localizedDescription
-            return nil
-        }
-    }
-
-    func importSelection(locationIDs: Set<UUID>, routeIDs: Set<UUID>, from library: LocationLibrary) {
-        var importedLocations = 0
-        var importedRoutes = 0
-        var skippedLocations = 0
-        var skippedRoutes = 0
-        var importedLocationIDs: [UUID] = []
-        var importedRouteIDs: [UUID] = []
-
-        var existingLocationIDs = Set(locations.map(\.id))
-        var existingRouteIDs = Set(routes.map(\.id))
-
-        for location in library.locations where locationIDs.contains(location.id) {
-            do {
-                var normalized = location
-                normalized.normalizeName()
-                try normalized.validate()
-                if existingLocationIDs.contains(normalized.id) {
-                    normalized = SavedLocation(id: UUID(), name: normalized.name, point: normalized.point)
-                }
-                existingLocationIDs.insert(normalized.id)
-                locations.append(normalized)
-                importedLocationIDs.append(normalized.id)
-                importedLocations += 1
-            } catch {
-                skippedLocations += 1
-            }
-        }
-
-        for route in library.routes where routeIDs.contains(route.id) {
-            do {
-                var normalized = route
-                normalized.normalizeName()
-                try normalized.validate()
-                if existingRouteIDs.contains(normalized.id) {
-                    normalized = SavedRoute(
-                        id: UUID(),
-                        name: normalized.name,
-                        waypoints: normalized.waypoints,
-                        speedMetersPerSecond: normalized.speedMetersPerSecond,
-                        updateMode: normalized.updateMode
-                    )
-                }
-                existingRouteIDs.insert(normalized.id)
-                routes.append(normalized)
-                importedRouteIDs.append(normalized.id)
-                importedRoutes += 1
-            } catch {
-                skippedRoutes += 1
-            }
-        }
-
-        if defaultLocationID == nil {
-            defaultLocationID = locations.first?.id
-        }
-
-        if let firstImportedRouteID = importedRouteIDs.first {
-            selectedRouteID = firstImportedRouteID
-            selectedLocationID = nil
-        } else if let firstImportedLocationID = importedLocationIDs.first {
-            selectedLocationID = firstImportedLocationID
-            selectedRouteID = nil
+        await deviceStore.refreshDevices(showLoadingIndicator: false, preserveFeedback: true)
+        syncDeviceFromStore()
+        if hasTargetDevice {
+            playbackState = service.playbackState(udid: targetUDID)
         } else {
-            selectedLocationID = locations.first?.id
-            selectedRouteID = nil
+            playbackState = .idle
         }
+    }
 
-        saveLibrary()
-        if skippedLocations + skippedRoutes > 0 {
-            errorMessage = L10n.f(
-                "Imported %d location(s), %d route(s). Skipped %d invalid item(s).",
-                importedLocations,
-                importedRoutes,
-                skippedLocations + skippedRoutes
-            )
-        } else {
-            errorMessage = nil
+    func handleCloseRequest() -> Bool {
+        guard hasRunningSession else { return true }
+
+        let alert = NSAlert()
+        alert.messageText = L10n.t("Route playback is still running.")
+        alert.informativeText = L10n.t("Choose whether playback should continue in the background or stop before closing this window.")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L10n.t("Keep Running and Close"))
+        alert.addButton(withTitle: L10n.t("Stop Route and Close"))
+        alert.addButton(withTitle: L10n.t("Cancel"))
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return true
+        case .alertSecondButtonReturn:
+            stop()
+            return true
+        default:
+            return false
         }
     }
 
     func selectLocation(_ id: UUID?) {
-        logDebug("selectLocation(\(id?.uuidString ?? "nil"))")
         selectedLocationID = id
         if id != nil {
             selectedRouteID = nil
@@ -382,7 +164,6 @@ final class LocationPlayerViewModel: ObservableObject {
     }
 
     func selectRoute(_ id: UUID?) {
-        logDebug("selectRoute(\(id?.uuidString ?? "nil"))")
         selectedRouteID = id
         if id != nil {
             selectedLocationID = nil
@@ -391,65 +172,40 @@ final class LocationPlayerViewModel: ObservableObject {
 
     @discardableResult
     func addLocation(at point: GeoPoint) -> UUID {
-        let location = SavedLocation(name: L10n.t("New Location"), point: point)
-        locations.append(location)
-        if defaultLocationID == nil {
-            defaultLocationID = location.id
-        }
+        let location = libraryController.addLocation(at: point)
+        syncFromLibraryController()
         selectLocation(location.id)
-        saveLibrary()
         return location.id
     }
 
     func deleteSelectedLocation() {
         guard let selectedLocationID else { return }
-        locations.removeAll { $0.id == selectedLocationID }
-        if defaultLocationID == selectedLocationID {
-            defaultLocationID = locations.first?.id
-        }
-        self.selectedLocationID = locations.first?.id
-        saveLibrary()
+        libraryController.deleteLocation(id: selectedLocationID)
+        syncFromLibraryController()
+        syncSelections()
     }
 
     func addRoute() {
-        let route = SavedRoute(
-            name: L10n.t("New Route"),
-            waypoints: [
-                GeoPoint(lat: 0, lon: 0),
-                GeoPoint(lat: 0.001, lon: 0.001)
-            ],
-            speedMetersPerSecond: 20,
-            updateMode: .interval(seconds: 1)
-        )
-        routes.append(route)
+        let route = libraryController.addRoute()
+        syncFromLibraryController()
         selectRoute(route.id)
-        saveLibrary()
     }
 
     func deleteSelectedRoute() {
         guard let selectedRouteID else { return }
-        routes.removeAll { $0.id == selectedRouteID }
-        self.selectedRouteID = routes.first?.id
-        if self.selectedRouteID == nil {
-            self.selectedLocationID = locations.first?.id
-        }
-        saveLibrary()
+        libraryController.deleteRoute(id: selectedRouteID)
+        syncFromLibraryController()
+        syncSelections()
     }
 
     func replaceLocation(_ location: SavedLocation) {
-        guard let index = locations.firstIndex(where: { $0.id == location.id }) else { return }
-        var normalized = location
-        normalized.normalizeName()
-        locations[index] = normalized
-        saveLibrary()
+        libraryController.replaceLocation(location)
+        syncFromLibraryController()
     }
 
     func replaceRoute(_ route: SavedRoute) {
-        guard let index = routes.firstIndex(where: { $0.id == route.id }) else { return }
-        var normalized = route
-        normalized.normalizeName()
-        routes[index] = normalized
-        saveLibrary()
+        libraryController.replaceRoute(route)
+        syncFromLibraryController()
     }
 
     func renameLocation(id: UUID, to newName: String) {
@@ -464,236 +220,346 @@ final class LocationPlayerViewModel: ObservableObject {
         replaceRoute(route)
     }
 
+    func exportLibraryData() -> Data? {
+        libraryController.exportLibraryData()
+    }
+
+    func importLibrary(from fileURL: URL) -> LocationLibrary? {
+        libraryController.importLibrary(from: fileURL)
+    }
+
+    func importSelection(locationIDs: Set<UUID>, routeIDs: Set<UUID>, from library: LocationLibrary) {
+        libraryController.importSelection(locationIDs: locationIDs, routeIDs: routeIDs, from: library)
+        syncFromLibraryController()
+    }
+
+    func prepareGPXImport(from fileURL: URL) -> GPXImportPreview? {
+        libraryController.prepareGPXImport(from: fileURL)
+    }
+
+    @discardableResult
+    func importRoute(
+        from preview: GPXImportPreview,
+        selectedTimeRange: ClosedRange<Date>? = nil,
+        selectedPointRange: ClosedRange<Int>? = nil
+    ) -> SavedRoute? {
+        let route = libraryController.importRoute(
+            from: preview,
+            selectedTimeRange: selectedTimeRange,
+            selectedPointRange: selectedPointRange
+        )
+        syncFromLibraryController()
+        return route
+    }
+
+    func setDefaultLocationToSelection() {
+        guard let selectedLocationID else {
+            feedback = FeedbackMessage(level: .warning, text: L10n.t("Select a location first."))
+            return
+        }
+        libraryController.setDefaultLocation(id: selectedLocationID)
+        syncFromLibraryController()
+    }
+
     func applySelectedLocation() {
         guard hasTargetDevice else {
-            errorMessage = L10n.t("Select a target simulator first.")
+            feedback = FeedbackMessage(level: .warning, text: L10n.t("Select a target simulator first."))
             return
         }
 
-        guard let index = selectedLocationIndex else {
-            errorMessage = L10n.t("Select a location first.")
+        guard let location = selectedLocation else {
+            feedback = FeedbackMessage(level: .warning, text: L10n.t("Select a location first."))
             return
         }
 
-        errorMessage = nil
+        feedback = nil
 
         Task { [weak self] in
             guard let self else { return }
             do {
-                self.logDebug("applySelectedLocation() start for udid=\(self.udid), locationID=\(self.locations[index].id)")
                 try await self.ensureTargetDeviceBootedForSend()
-                try self.locations[index].validate()
-                try await self.service.setLocation(udid: self.udid, point: self.locations[index].point)
-                self.logDebug("applySelectedLocation() success for udid=\(self.udid), locationID=\(self.locations[index].id)")
+                try location.validate()
+                try await self.service.setLocation(udid: self.targetUDID, point: location.point)
+                self.playbackState = self.service.playbackState(udid: self.targetUDID)
+                self.feedback = FeedbackMessage(level: .success, text: L10n.t("Location sent to simulator."))
             } catch {
-                self.errorMessage = error.localizedDescription
-                self.logDebug("applySelectedLocation() failed for udid=\(self.udid): \(error.localizedDescription)")
+                self.feedback = FeedbackMessage(level: .error, text: error.localizedDescription)
             }
         }
     }
 
     func playSelectedRoute() {
         guard hasTargetDevice else {
-            errorMessage = L10n.t("Select a target simulator first.")
+            feedback = FeedbackMessage(level: .warning, text: L10n.t("Select a target simulator first."))
             return
         }
 
-        guard let index = selectedRouteIndex else {
-            errorMessage = L10n.t("Select a route first.")
+        guard let route = selectedRoute else {
+            feedback = FeedbackMessage(level: .warning, text: L10n.t("Select a route first."))
             return
         }
 
-        errorMessage = nil
+        feedback = nil
 
         Task { [weak self] in
             guard let self else { return }
             do {
-                self.logDebug(
-                    """
-                    playSelectedRoute() start for udid=\(self.udid), routeID=\(self.routes[index].id), \
-                    waypoints=\(self.routes[index].waypoints.count), mode=\(self.routes[index].updateMode)
-                    """
-                )
                 try await self.ensureTargetDeviceBootedForSend()
-                try self.routes[index].validate()
-                self.playbackState = .running(routeID: self.routes[index].id)
-                try await self.service.startRoute(udid: self.udid, route: self.routes[index])
-                self.playbackState = self.service.playbackState(udid: self.udid)
-                self.logDebug("playSelectedRoute() command accepted; playbackState=\(self.playbackState)")
+                try route.validate()
+                self.playbackState = .running(routeID: route.id)
+                try await self.service.startRoute(udid: self.targetUDID, route: route)
+                self.playbackState = self.service.playbackState(udid: self.targetUDID)
+                self.feedback = FeedbackMessage(level: .success, text: L10n.f("Started route \"%@\".", route.name))
             } catch {
-                self.errorMessage = error.localizedDescription
+                self.feedback = FeedbackMessage(level: .error, text: error.localizedDescription)
                 self.playbackState = .failed(message: error.localizedDescription)
-                self.logDebug("playSelectedRoute() failed: \(error.localizedDescription)")
             }
         }
-    }
-
-    func importRoute(from fileURL: URL) {
-        guard let preview = prepareGPXImport(from: fileURL) else { return }
-        importRoute(from: preview)
-    }
-
-    func prepareGPXImport(from fileURL: URL) -> GPXImportPreview? {
-        errorMessage = nil
-
-        let hasSecurityScope = fileURL.startAccessingSecurityScopedResource()
-        defer {
-            if hasSecurityScope {
-                fileURL.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        do {
-            return try GPXRouteImporter.preview(from: fileURL)
-        } catch {
-            errorMessage = error.localizedDescription
-            return nil
-        }
-    }
-
-    func importRoute(
-        from preview: GPXImportPreview,
-        selectedTimeRange: ClosedRange<Date>? = nil,
-        selectedPointRange: ClosedRange<Int>? = nil
-    ) {
-        errorMessage = nil
-
-        do {
-            let route = try preview.route(
-                selectedTimeRange: selectedTimeRange,
-                selectedPointRange: selectedPointRange
-            )
-            routes.append(route)
-            selectRoute(route.id)
-            saveLibrary()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    var defaultLocationName: String {
-        guard let defaultLocationID,
-              let location = locations.first(where: { $0.id == defaultLocationID }) else {
-            return L10n.t("None")
-        }
-        return location.name
-    }
-
-    func setDefaultLocationToSelection() {
-        guard let selectedLocationID else {
-            errorMessage = L10n.t("Select a location first.")
-            return
-        }
-        defaultLocationID = selectedLocationID
-        saveLibrary()
     }
 
     func resetToDefaultLocation() {
         guard hasTargetDevice else {
-            errorMessage = L10n.t("Select a target simulator first.")
+            feedback = FeedbackMessage(level: .warning, text: L10n.t("Select a target simulator first."))
             return
         }
 
         guard let defaultLocationID,
               let location = locations.first(where: { $0.id == defaultLocationID }) else {
-            errorMessage = L10n.t("No default location configured.")
+            feedback = FeedbackMessage(level: .warning, text: L10n.t("No default location configured."))
             return
         }
 
-        errorMessage = nil
+        feedback = nil
+
         Task { [weak self] in
             guard let self else { return }
             do {
                 try await self.ensureTargetDeviceBootedForSend()
                 try location.validate()
-                try await self.service.setLocation(udid: self.udid, point: location.point)
+                try await self.service.setLocation(udid: self.targetUDID, point: location.point)
+                self.feedback = FeedbackMessage(level: .success, text: L10n.t("Default location sent to simulator."))
             } catch {
-                self.errorMessage = error.localizedDescription
+                self.feedback = FeedbackMessage(level: .error, text: error.localizedDescription)
             }
         }
     }
 
     func clearAppliedLocation() {
         guard hasTargetDevice else {
-            errorMessage = L10n.t("Select a target simulator first.")
+            feedback = FeedbackMessage(level: .warning, text: L10n.t("Select a target simulator first."))
             return
         }
 
-        errorMessage = nil
+        feedback = nil
+
         Task { [weak self] in
             guard let self else { return }
             do {
                 try await self.ensureTargetDeviceBootedForSend()
-                try await self.service.clearLocation(udid: self.udid)
+                try await self.service.clearLocation(udid: self.targetUDID)
+                self.feedback = FeedbackMessage(level: .success, text: L10n.t("Cleared simulated location."))
             } catch {
-                self.errorMessage = error.localizedDescription
+                self.feedback = FeedbackMessage(level: .error, text: error.localizedDescription)
             }
         }
     }
 
     func togglePauseResume() {
-        errorMessage = nil
         guard hasTargetDevice else {
-            errorMessage = L10n.t("Select a target simulator first.")
+            feedback = FeedbackMessage(level: .warning, text: L10n.t("Select a target simulator first."))
             return
         }
 
-        let currentState = service.playbackState(udid: udid)
+        let currentState = service.playbackState(udid: targetUDID)
         playbackState = currentState
-        logDebug("togglePauseResume() called for udid=\(udid), currentState=\(currentState)")
 
         do {
             switch currentState {
             case .running:
-                try service.pauseRoute(udid: udid)
+                try service.pauseRoute(udid: targetUDID)
             case .paused:
-                try service.resumeRoute(udid: udid)
+                try service.resumeRoute(udid: targetUDID)
             default:
-                errorMessage = L10n.t("No active route to pause or resume.")
+                feedback = FeedbackMessage(level: .warning, text: L10n.t("No active route to pause or resume."))
+                return
             }
-            playbackState = service.playbackState(udid: udid)
-            logDebug("togglePauseResume() success for udid=\(udid), newState=\(playbackState)")
+            playbackState = service.playbackState(udid: targetUDID)
+            feedback = nil
         } catch {
-            errorMessage = error.localizedDescription
-            logDebug("togglePauseResume() failed for udid=\(udid): \(error.localizedDescription)")
+            feedback = FeedbackMessage(level: .error, text: error.localizedDescription)
         }
     }
 
     func stop() {
-        errorMessage = nil
         guard hasTargetDevice else {
-            errorMessage = L10n.t("Select a target simulator first.")
+            feedback = FeedbackMessage(level: .warning, text: L10n.t("Select a target simulator first."))
             return
         }
 
+        feedback = nil
+
         Task { [weak self] in
             guard let self else { return }
-            self.logDebug("stop() requested for udid=\(self.udid)")
-            await self.service.stopRoute(udid: self.udid)
-            self.playbackState = self.service.playbackState(udid: self.udid)
-            self.logDebug("stop() finished for udid=\(self.udid), newState=\(self.playbackState)")
+            await self.service.stopRoute(udid: self.targetUDID)
+            self.playbackState = self.service.playbackState(udid: self.targetUDID)
         }
     }
 
-    var debugLogLineCount: Int {
-        guard !debugLogText.isEmpty else { return 0 }
-        return debugLogText.split(separator: "\n", omittingEmptySubsequences: false).count
+    func clearFeedback() {
+        feedback = nil
+        deviceStore.clearFeedback()
+        libraryController.clearFeedback()
     }
 
-    var debugLogShareText: String {
-        let header = L10n.f("SimctlHelperUI Debug Log\nDevice: %@\nUDID: %@\n-----\n", deviceName, udid)
-        if debugLogText.isEmpty {
-            return "\(header)\(L10n.t("(empty)"))"
+    private var selectedLocation: SavedLocation? {
+        guard let selectedLocationID else { return nil }
+        return locations.first(where: { $0.id == selectedLocationID })
+    }
+
+    private var selectedRoute: SavedRoute? {
+        guard let selectedRouteID else { return nil }
+        return routes.first(where: { $0.id == selectedRouteID })
+    }
+
+    private func bindStores() {
+        libraryController.$locations
+            .sink { [weak self] locations in
+                self?.locations = locations
+                self?.syncSelections()
+            }
+            .store(in: &cancellables)
+
+        libraryController.$routes
+            .sink { [weak self] routes in
+                self?.routes = routes
+                self?.syncSelections()
+            }
+            .store(in: &cancellables)
+
+        libraryController.$defaultLocationID
+            .sink { [weak self] defaultLocationID in
+                self?.defaultLocationID = defaultLocationID
+            }
+            .store(in: &cancellables)
+
+        libraryController.$feedback
+            .sink { [weak self] feedback in
+                guard let feedback else { return }
+                self?.feedback = feedback
+            }
+            .store(in: &cancellables)
+
+        deviceStore.$devices
+            .sink { [weak self] _ in
+                self?.syncDeviceFromStore()
+            }
+            .store(in: &cancellables)
+
+        deviceStore.$feedback
+            .sink { [weak self] feedback in
+                guard let feedback else { return }
+                self?.feedback = feedback
+            }
+            .store(in: &cancellables)
+    }
+
+    private func syncFromLibraryController() {
+        locations = libraryController.locations
+        routes = libraryController.routes
+        defaultLocationID = libraryController.defaultLocationID
+    }
+
+    private func syncSelections() {
+        if let selectedRouteID,
+           routes.contains(where: { $0.id == selectedRouteID }) {
+            return
         }
-        return "\(header)\(debugLogText)"
+
+        if let selectedLocationID,
+           locations.contains(where: { $0.id == selectedLocationID }) {
+            return
+        }
+
+        if let firstLocationID = locations.first?.id {
+            selectedLocationID = firstLocationID
+            selectedRouteID = nil
+            return
+        }
+
+        if let firstRouteID = routes.first?.id {
+            selectedRouteID = firstRouteID
+            selectedLocationID = nil
+            return
+        }
+
+        selectedLocationID = nil
+        selectedRouteID = nil
     }
 
-    func clearDebugLog() {
-        RouteDebugLogStore.shared.clear()
-        logDebug("Debug log cleared by user")
+    private func syncDeviceFromStore() {
+        guard hasTargetDevice else {
+            deviceName = L10n.t("No simulator selected")
+            deviceState = .shutdown
+            playbackState = .idle
+            return
+        }
+
+        guard let device = deviceStore.device(for: targetUDID) else {
+            deviceName = L10n.t("Missing simulator")
+            deviceState = .shutdown
+            playbackState = .idle
+            return
+        }
+
+        deviceName = device.name
+        deviceState = device.state
+        playbackState = service.playbackState(udid: targetUDID)
     }
 
-    func refreshDebugLog() {
-        debugLogText = RouteDebugLogStore.shared.snapshot()
+    private func ensureTargetDeviceBootedForSend() async throws {
+        guard hasTargetDevice else {
+            throw SimctlError.commandFailed(L10n.t("Select a target simulator in the Location Simulation window first."))
+        }
+
+        guard !isDeviceBooted else { return }
+
+        guard autoBootOnSend else {
+            throw SimctlError.commandFailed(L10n.t("Selected simulator is shutdown. Enable Auto-Boot in Options or boot it manually."))
+        }
+
+        do {
+            try await service.bootDevice(udid: targetUDID)
+        } catch {
+            await refreshDeviceStatus()
+            if !isDeviceBooted {
+                throw error
+            }
+        }
+
+        let bootDeadline = Date().addingTimeInterval(30)
+        while Date() < bootDeadline {
+            await refreshDeviceStatus()
+            if isDeviceBooted {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+
+        throw SimctlError.commandFailed(L10n.t("Failed to boot selected simulator within timeout."))
+    }
+
+    private static let autoBootPreferenceKey = "autoBootOnSend"
+    private static let testSupportDeviceStore = DeviceStore(autoload: false)
+    private nonisolated(unsafe) static var testSupportLibraryControllers: [String: LocationLibraryController] = [:]
+
+    private static func testSupportLibraryController(for libraryStore: LocationLibraryStore) -> LocationLibraryController {
+        let key = libraryStore.storageIdentifier
+        if let controller = testSupportLibraryControllers[key] {
+            return controller
+        }
+
+        let controller = LocationLibraryController(libraryStore: libraryStore)
+        testSupportLibraryControllers[key] = controller
+        return controller
     }
 }
