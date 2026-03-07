@@ -10,7 +10,7 @@ It helps manage iOS simulators and includes dedicated per-device location simula
 ## Feature Overview
 
 - Native macOS device overview:
-  - Window toolbar with `Open Controls`, `Refresh`, filter segments, search, and view options
+  - Window toolbar with filter segments, search, and view options
   - Searchable, sortable device table (name, state, availability, device type, runtime)
   - Inspector for the selected simulator instead of a duplicated action panel
   - Row context menu for `Open Controls`, `Boot`/`Shutdown`, `Clone`, `Delete`, `Copy UDID`
@@ -24,6 +24,7 @@ It helps manage iOS simulators and includes dedicated per-device location simula
   - Open from row context menu (`Open Controls`)
   - Open by double-clicking a booted device row
   - Open from the inspector action button
+  - Larger default window height so the initial layout shows the full action area without manual resizing
 - Per-device route playback control using `xcrun simctl location`:
   - Play / Pause / Resume / Stop
   - Reset to configured default location
@@ -51,6 +52,7 @@ Each `Location Simulation` window opens in its own macOS window and is permanent
 - Opening/focusing a `Location Simulation` window no longer restores focus back to the previously active window.
 - The `Device Overview` device list refreshes automatically in the background every 10 seconds (non-blocking UI refresh).
 - Each `Location Simulation` window provides its own `Refresh` toolbar action for a one-time device status refresh.
+- The main `Device Overview` toolbar stays focused on filtering, search, and view options; opening controls is done from the inspector or row actions.
 - Closing a window with an active route asks whether playback should continue in the background, stop before closing, or cancel the close action.
 - Standard macOS window chrome is enforced so the content and split separators start below the toolbar/titlebar instead of running underneath it.
 
@@ -180,8 +182,9 @@ The app follows MVVM.
   - Migrated large modal workflows (Map Editor, GPX Preview, Library Import Selection) to dedicated resizable auxiliary windows with per-window autosaved frame state.
   - Introduced localization infrastructure (`L10n` + `Localizable.xcstrings`) and migrated visible UI labels, error messages, and generated default names to localized strings.
   - Added German as project localization region and enabled automatic language selection via system locale (`en`/`de`).
+  - Added missing German translations for main-window search and inspector actions (`Search Simulators`, `Open Controls`, `Actions`).
   - Refined main window density/spacing and adaptive panel sizing to reduce dead whitespace.
-  - Added native minimum-size enforcement for location simulation windows (minimum equals default size) using system window constraints instead of manual resize correction.
+  - Added native minimum-size enforcement for location simulation windows (minimum equals default size) using system window constraints instead of manual resize correction, and increased the default height to better fit the initial content.
   - Added semantic button highlighting for route/location execution controls (`Play/Pause/Resume/Stop`, `Set/Clear/Reset Location`).
   - Cleaned String Catalog metadata to avoid false-positive stale markers when using the `L10n` wrapper pattern.
 - Added location simulation access via:
@@ -202,7 +205,7 @@ The app follows MVVM.
 - Removed automatic main-window foreground stealing when location simulation windows are created/updated.
 - Reworked main device table open behavior to use table primary action (double-click) instead of per-cell gestures, improving row selection reliability.
 - Simplified window focus coordination so main window and location simulation windows do not fight for key focus after opening/focusing control windows.
-- Added non-blocking periodic background refresh for the main device list (10-second interval), while keeping manual refresh support.
+- Added non-blocking periodic background refresh for the main device list (10-second interval).
 - Disabled periodic device polling in location simulation (one-time refresh on open; manual refresh via main window).
 - Added app-menu import/export commands for location/route data (File menu), wired to the existing import/export flows.
 - Added explicit `Quit SimctlHelperUI` menu entry and configured app termination when the last window closes.

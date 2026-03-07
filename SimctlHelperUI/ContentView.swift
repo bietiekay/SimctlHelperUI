@@ -86,18 +86,6 @@ struct ContentView: View {
             )
             .toolbar {
                 ToolbarItemGroup {
-                    Button(L10n.t("Open Controls")) {
-                        openSelectedDeviceControls()
-                    }
-                    .disabled(selectedDevice == nil)
-
-                    Button(L10n.t("Refresh")) {
-                        Task {
-                            await deviceStore.refreshDevices()
-                        }
-                    }
-                    .keyboardShortcut("r")
-
                     Picker(L10n.t("Filter"), selection: $filter) {
                         ForEach(DeviceFilter.allCases) { filter in
                             Text(filter.title).tag(filter)

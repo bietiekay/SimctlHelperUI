@@ -4,7 +4,7 @@ import AppKit
 @MainActor
 enum LocationPlayerWindowCoordinator {
     static let windowGroupID = "location-player"
-    static let locationPlayerDefaultSize = NSSize(width: 980, height: 640)
+    static let locationPlayerDefaultSize = NSSize(width: 980, height: 760)
     private static let identifierPrefix = "location-player:"
     private static let mainWindowIdentifier = NSUserInterfaceItemIdentifier("main-window")
     private static let mainWindowMinimumSize = NSSize(width: 940, height: 620)
