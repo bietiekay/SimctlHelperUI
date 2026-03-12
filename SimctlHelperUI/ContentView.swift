@@ -235,24 +235,22 @@ struct ContentView: View {
     }
 
     private var content: some View {
-        deviceTable
-            .overlay(alignment: .top) {
-                if let visibleFeedback {
-                    FeedbackBannerView(message: visibleFeedback)
-                        .padding(.top, 12)
-                        .padding(.horizontal, 12)
+        VStack(spacing: 0) {
+            deviceTable
+                .inspector(isPresented: $isInspectorPresented) {
+                    DeviceInspectorView(
+                        selectedDevice: selectedDevice,
+                        onOpenControls: openSelectedDeviceControls,
+                        onToggleBoot: toggleSelectedBootState,
+                        onClone: { cloneTarget = selectedDevice },
+                        onDelete: { deleteTarget = selectedDevice },
+                        onCopyUDID: copySelectedUDID
+                    )
                 }
-            }
-            .inspector(isPresented: $isInspectorPresented) {
-                DeviceInspectorView(
-                    selectedDevice: selectedDevice,
-                    onOpenControls: openSelectedDeviceControls,
-                    onToggleBoot: toggleSelectedBootState,
-                    onClone: { cloneTarget = selectedDevice },
-                    onDelete: { deleteTarget = selectedDevice },
-                    onCopyUDID: copySelectedUDID
-                )
-            }
+
+            Divider()
+            FeedbackStatusBarView(message: visibleFeedback, onDismiss: clearVisibleFeedback)
+        }
     }
 
     @ViewBuilder
@@ -401,6 +399,11 @@ struct ContentView: View {
         pasteboard.clearContents()
         pasteboard.setString(udid, forType: .string)
         deviceStore.feedback = FeedbackMessage(level: .info, text: L10n.t("UDID copied to clipboard."))
+    }
+
+    private func clearVisibleFeedback() {
+        libraryController.clearFeedback()
+        deviceStore.clearFeedback()
     }
 
     private func beginGPXRouteImport() {

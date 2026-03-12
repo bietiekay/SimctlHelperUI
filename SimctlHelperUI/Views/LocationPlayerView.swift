@@ -40,21 +40,6 @@ struct LocationPlayerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let feedback = viewModel.feedback {
-                HStack(spacing: 10) {
-                    FeedbackBannerView(message: feedback)
-                    Button {
-                        viewModel.clearFeedback()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
-            }
-
             headerView
             Divider()
 
@@ -69,6 +54,9 @@ struct LocationPlayerView: View {
 
             Divider()
             playbackControls
+
+            Divider()
+            FeedbackStatusBarView(message: viewModel.feedback, onDismiss: viewModel.clearFeedback)
         }
         .frame(
             minWidth: LocationPlayerWindowCoordinator.locationPlayerDefaultSize.width,

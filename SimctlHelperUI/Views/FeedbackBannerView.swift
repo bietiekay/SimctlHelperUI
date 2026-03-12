@@ -47,3 +47,30 @@ struct FeedbackBannerView: View {
         accentColor.opacity(0.12)
     }
 }
+
+struct FeedbackStatusBarView: View {
+    let message: FeedbackMessage?
+    var onDismiss: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let message {
+                FeedbackBannerView(message: message)
+
+                if let onDismiss {
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else {
+                Spacer(minLength: 0)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(Color(NSColor.controlBackgroundColor))
+    }
+}

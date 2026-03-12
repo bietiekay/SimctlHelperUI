@@ -35,7 +35,7 @@ It helps manage iOS simulators and includes dedicated per-device location simula
   - GPX route import
   - Library export/import as JSON
   - Selective import (choose which locations/routes to import)
-  - Typed in-app feedback (`info`, `success`, `warning`, `error`)
+  - Typed in-app feedback (`info`, `success`, `warning`, `error`) in a dedicated bottom status area per window
 - Diagnostics:
   - Separate Diagnostics window for route and command logs
   - Copy, clear, refresh, and export diagnostics without cluttering the primary workflow
@@ -175,6 +175,7 @@ The app follows MVVM.
   - Bound each control window to exactly one simulator UDID and removed in-window device switching.
   - Moved diagnostics out of the main workflow into a dedicated Diagnostics window.
   - Replaced untyped string errors with typed `FeedbackMessage` banners for clearer success/warning/error states.
+  - Moved feedback display into a dedicated bottom status-bar area so success/error messages are not overlaid by toolbar/content UI.
   - Switched library import/export away from neutral fallback windows to focused scene actions.
   - Enforced standard macOS window chrome so split separators and sidebars begin below the toolbar/titlebar.
 - UI/UX polish + i18n v1 (DE/EN):
