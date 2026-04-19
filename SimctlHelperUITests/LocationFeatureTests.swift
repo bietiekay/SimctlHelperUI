@@ -461,6 +461,80 @@ final class LocationFeatureTests: XCTestCase {
             L10n.t("No route points found. The GPX must contain at least two track/route points.")
         )
     }
+
+    func testIndexByIdentifierOverwritesDuplicateRuntimeIdentifiers() {
+        let identifier = "com.apple.CoreSimulator.SimRuntime.iOS-26-0"
+        let runtimes = [
+            SimRuntime(
+                isAvailable: true,
+                version: "26.0",
+                isInternal: false,
+                buildversion: "22A000",
+                supportedArchitectures: ["arm64"],
+                supportedDeviceTypes: [],
+                identifier: identifier,
+                platform: "iOS",
+                bundlePath: "/Applications/Xcode.app/RuntimeA.bundle",
+                runtimeRoot: "/Applications/Xcode.app/RuntimeA",
+                lastUsage: nil,
+                name: "iOS 26.0"
+            ),
+            SimRuntime(
+                isAvailable: true,
+                version: "26.0",
+                isInternal: false,
+                buildversion: "22A001",
+                supportedArchitectures: ["arm64"],
+                supportedDeviceTypes: [],
+                identifier: identifier,
+                platform: "iOS",
+                bundlePath: "/Applications/Xcode.app/RuntimeB.bundle",
+                runtimeRoot: "/Applications/Xcode.app/RuntimeB",
+                lastUsage: nil,
+                name: "iOS 26.0 Updated"
+            )
+        ]
+
+        let indexed = indexByIdentifier(runtimes, identifier: \.identifier)
+
+        XCTAssertEqual(indexed.count, 1)
+        XCTAssertEqual(indexed[identifier]?.name, "iOS 26.0 Updated")
+        XCTAssertEqual(indexed[identifier]?.buildversion, "22A001")
+    }
+
+    func testIndexByIdentifierOverwritesDuplicateDeviceTypeIdentifiers() {
+        let identifier = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
+        let deviceTypes = [
+            SimDeviceType(
+                productFamily: "iPhone",
+                bundlePath: "/Applications/Xcode.app/DeviceTypeA.bundle",
+                maxRuntimeVersion: 26_0000,
+                maxRuntimeVersionString: "26.0",
+                identifier: identifier,
+                modelIdentifier: "iPhone17,1",
+                minRuntimeVersionString: "26.0",
+                minRuntimeVersion: 26_0000,
+                name: "iPhone 17"
+            ),
+            SimDeviceType(
+                productFamily: "iPhone",
+                bundlePath: "/Applications/Xcode.app/DeviceTypeB.bundle",
+                maxRuntimeVersion: 26_0001,
+                maxRuntimeVersionString: "26.0.1",
+                identifier: identifier,
+                modelIdentifier: "iPhone17,2",
+                minRuntimeVersionString: "26.0",
+                minRuntimeVersion: 26_0000,
+                name: "iPhone 17 Pro"
+            )
+        ]
+
+        let indexed = indexByIdentifier(deviceTypes, identifier: \.identifier)
+
+        XCTAssertEqual(indexed.count, 1)
+        XCTAssertEqual(indexed[identifier]?.name, "iPhone 17 Pro")
+        XCTAssertEqual(indexed[identifier]?.modelIdentifier, "iPhone17,2")
+    }
 }
 
 private final class UnusedSimctlService: SimctlLocationControlling {

@@ -212,6 +212,9 @@ The app follows MVVM.
 - Added explicit `Quit SimctlHelperUI` menu entry and configured app termination when the last window closes.
 - Reworked single-location preview map rendering to update pin placement reliably when switching selected locations.
 - Fixed a teardown stability issue in tests/preview lifecycle around `LocationPlayerViewModel` observer updates and test service deallocation.
+- Hardened device-list refresh so duplicate runtime or device-type identifiers returned by `simctl list -j` no longer crash startup; the newest entry now wins when indexing metadata.
+- Added regression tests covering duplicate runtime and device-type identifier indexing during device refresh.
+- Refreshed the Xcode project settings for the current toolchain and enabled the nonlocalized-string static analyzer check.
 
 ## License
 

@@ -1,6 +1,12 @@
 import Foundation
 import Combine
 
+func indexByIdentifier<T>(_ items: [T], identifier: KeyPath<T, String>) -> [String: T] {
+    items.reduce(into: [:]) { result, item in
+        result[item[keyPath: identifier]] = item
+    }
+}
+
 enum DeviceFilter: String, CaseIterable, Identifiable {
     case all
     case booted
@@ -130,25 +136,7 @@ final class DeviceStore: ObservableObject {
 
         do {
             let response = try await service.fetchDeviceList()
-            runtimes = Dictionary(uniqueKeysWithValues: response.runtimes.map { ($0.identifier, $0) })
-            deviceTypes = Dictionary(uniqueKeysWithValues: response.devicetypes.map { ($0.identifier, $0) })
-
-            var flattenedRecords: [DeviceRecord] = []
-            for (runtimeIdentifier, deviceList) in response.devices {
-                for var device in deviceList {
-                    device.runtimeIdentifier = runtimeIdentifier
-                    flattenedRecords.append(
-                        DeviceRecord(
-                            device: device,
-                            deviceTypeName: deviceTypes[device.deviceTypeIdentifier]?.name ?? device.deviceTypeName,
-                            runtimeName: runtimes[runtimeIdentifier]?.name ?? L10n.t("Unknown")
-                        )
-                    )
-                }
-            }
-
-            devices = flattenedRecords
-            applySorting()
+            applyDeviceList(response)
         } catch {
             if devices.isEmpty || !preserveFeedback {
                 feedback = FeedbackMessage(level: .error, text: error.localizedDescription)
@@ -227,8 +215,18 @@ final class DeviceStore: ObservableObject {
         defer { isRefreshing = false }
 
         let response = try await service.fetchDeviceList()
-        runtimes = Dictionary(uniqueKeysWithValues: response.runtimes.map { ($0.identifier, $0) })
-        deviceTypes = Dictionary(uniqueKeysWithValues: response.devicetypes.map { ($0.identifier, $0) })
+        applyDeviceList(response)
+    }
+
+    private func waitForOngoingRefresh() async {
+        while isRefreshing {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    private func applyDeviceList(_ response: SimctlListResponse) {
+        runtimes = indexByIdentifier(response.runtimes, identifier: \.identifier)
+        deviceTypes = indexByIdentifier(response.devicetypes, identifier: \.identifier)
 
         var flattenedRecords: [DeviceRecord] = []
         for (runtimeIdentifier, deviceList) in response.devices {
@@ -246,12 +244,6 @@ final class DeviceStore: ObservableObject {
 
         devices = flattenedRecords
         applySorting()
-    }
-
-    private func waitForOngoingRefresh() async {
-        while isRefreshing {
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
     }
 
     private func applySorting() {
