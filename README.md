@@ -39,6 +39,12 @@ It helps manage iOS simulators and includes dedicated per-device location simula
 - Diagnostics:
   - Separate Diagnostics window for route and command logs
   - Copy, clear, refresh, and export diagnostics without cluttering the primary workflow
+- Simulator Logs:
+  - Separate `Simulator Logs` window for live simulator/app logs
+  - Per-simulator and global stream controls for booted devices
+  - Live subsystem discovery from incoming log events
+  - Level, subsystem, simulator, and text filtering
+  - Subtle level coloring, double-click detail view, and `.log` / `.json` export for selected rows
 
 ## Location Simulation
 
@@ -108,6 +114,45 @@ Each `Location Simulation` window opens in its own macOS window and is permanent
   - Resolves ID collisions by generating new UUIDs
   - Surfaces partial imports as warnings instead of generic errors
 
+## Simulator Logs
+
+The `Simulator Logs` window provides a native macOS log console backed by `xcrun simctl spawn <udid> log stream`.
+
+### Opening Logs
+
+- Open the shared log console from `Window > Simulator Logs`.
+- Use the main window toolbar button to open the log console quickly.
+- Start or stop logs for a single booted simulator from:
+  - the device table row context menu,
+  - the inspector action area,
+  - the simulator list inside the log console.
+- Use the global log toggle in the log console to start or stop streams for all currently booted simulators.
+
+Only booted simulators can stream logs. When global logging is enabled, newly discovered booted simulators are started automatically on device refresh, and streams for simulators that shut down are stopped.
+
+### Filtering & Discovery
+
+- Log streaming uses explicit simulator UDIDs, so multiple simulators can be observed at the same time.
+- Subsystems are discovered live from incoming log events and appear in the filter sidebar as they arrive.
+- Empty subsystem selection means "show all subsystems".
+- Selecting subsystem filters or changing level filters restarts active stream processes with a narrower `log stream` predicate, reducing incoming data before it reaches the UI.
+- Text filtering remains in-app for quick local searching across message, subsystem, category, process, sender, and simulator fields.
+
+### Reading Logs
+
+- The log list is optimized for high-volume streams with batched parsing and a capped in-memory session buffer.
+- The visible list is capped to keep scrolling responsive while recent matching entries stay available.
+- Use the order toggle to show newest messages at the top or bottom.
+- Use the follow-tail toggle to keep the newest visible message pinned while logs arrive.
+- Message previews get the widest column in the list and can wrap to two lines.
+- Double-click a row to open a resizable detail sheet with the full message, parsed fields, and raw JSON.
+
+### Export
+
+- Select one or more log rows and export them from the log console toolbar.
+- `.log` export writes readable timestamped full-message lines.
+- `.json` export writes pretty-printed parsed entries, including raw fields where available.
+
 ## Requirements
 
 - macOS 14+
@@ -143,24 +188,28 @@ Each `Location Simulation` window opens in its own macOS window and is permanent
    - play/pause/resume/stop route playback,
    - export/import the shared JSON library.
 6. Open `Window > Diagnostics` when you need command or route logs.
+7. Open `Window > Simulator Logs` when you need live app or simulator logs.
 
 ## Architecture
 
 The app follows MVVM.
 
-- Models: simulator and location domain models (`SimctlModels.swift`, `LocationModels.swift`)
+- Models: simulator, location, and log domain models (`SimctlModels.swift`, `LocationModels.swift`, `SimulatorLogModels.swift`)
 - Services:
   - `SimctlService`: command execution and session control for simctl
   - `LocationLibraryStore`: persistence for location/route library
   - `GPXRouteImporter`: GPX parsing into saved routes
+  - `SimulatorLogStreamService`: lifecycle and pipe handling for `simctl spawn <udid> log stream`
 - ViewModels:
   - `DeviceStore`
   - `LocationLibraryController`
   - `LocationPlayerViewModel`
+  - `SimulatorLogStore`
 - Views:
   - `ContentView` with toolbar, searchable/sortable table, and inspector
   - `LocationPlayerView` (`Location Simulation`) and auxiliary editing/import windows
   - `DiagnosticsWindowView`
+  - `SimulatorLogWindowView`
 - Window coordination:
   - `LocationPlayerWindowCoordinator` manages per-device window identity, minimum sizes, focus, close confirmation hooks, and standard macOS window chrome
 - Feedback:
@@ -168,6 +217,15 @@ The app follows MVVM.
 
 ## Recent Changes (Documented)
 
+- Added native Simulator Logs console:
+  - Streams live logs from booted simulators with explicit UDIDs rather than ambiguous `booted` targeting.
+  - Adds per-device and global stream controls in the main window, inspector, context menus, and log window.
+  - Parses `log stream --style ndjson` output into structured log entries while preserving raw JSON.
+  - Treats malformed stream lines as non-fatal diagnostic rows instead of stopping the stream.
+  - Discovers subsystems live from incoming events and provides simulator, level, subsystem, and text filters.
+  - Restarts active streams with narrower predicates when subsystem or level filters change to reduce incoming log volume.
+  - Uses batched ingestion, capped buffers, and a custom scrollable log list for better performance under noisy streams.
+  - Supports newest-first ordering, follow-tail scrolling, double-click full-message details, and `.log` / `.json` export for selected rows.
 - Native macOS UX refresh:
   - Replaced the old duplicated action panel flow with a real toolbar + inspector main window layout.
   - Added live search, filter segments, explicit sorting controls, and richer device context menus.

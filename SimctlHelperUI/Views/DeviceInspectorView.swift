@@ -4,6 +4,9 @@ struct DeviceInspectorView: View {
     let selectedDevice: DeviceRecord?
     let onOpenControls: () -> Void
     let onToggleBoot: () -> Void
+    let isLogStreaming: Bool
+    let onOpenLogs: () -> Void
+    let onToggleLogs: () -> Void
     let onClone: () -> Void
     let onDelete: () -> Void
     let onCopyUDID: () -> Void
@@ -34,6 +37,15 @@ struct DeviceInspectorView: View {
                 Menu(L10n.t("Actions")) {
                     Button(selectedDevice.isBooted ? L10n.t("Shutdown") : L10n.t("Boot")) {
                         onToggleBoot()
+                    }
+
+                    Button(isLogStreaming ? L10n.t("Stop Logs") : L10n.t("Start Logs")) {
+                        onToggleLogs()
+                    }
+                    .disabled(!selectedDevice.isBooted && !isLogStreaming)
+
+                    Button(L10n.t("Open Simulator Logs")) {
+                        onOpenLogs()
                     }
 
                     Button(L10n.t("Clone Device")) {

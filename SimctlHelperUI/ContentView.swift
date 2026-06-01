@@ -21,6 +21,7 @@ struct ContentView: View {
 
     @ObservedObject var deviceStore: DeviceStore
     @ObservedObject var libraryController: LocationLibraryController
+    @ObservedObject var logStore: SimulatorLogStore
 
     @State private var selectedDeviceID: String?
     @State private var searchText = ""
@@ -35,6 +36,16 @@ struct ContentView: View {
     @State private var libraryExportDocument = LocationLibraryTransferDocument(data: Data())
     @State private var windowIdentifier: String?
     @State private var owningWindow: NSWindow?
+
+    init(
+        deviceStore: DeviceStore,
+        libraryController: LocationLibraryController,
+        logStore: SimulatorLogStore
+    ) {
+        self.deviceStore = deviceStore
+        self.libraryController = libraryController
+        self.logStore = logStore
+    }
 
     private var selectedDevice: DeviceRecord? {
         guard let selectedDeviceID else { return nil }
@@ -86,6 +97,12 @@ struct ContentView: View {
             )
             .toolbar {
                 ToolbarItemGroup {
+                    Button {
+                        openLogWindow()
+                    } label: {
+                        Label(L10n.t("Simulator Logs"), systemImage: "list.bullet.rectangle")
+                    }
+
                     Picker(L10n.t("Filter"), selection: $filter) {
                         ForEach(DeviceFilter.allCases) { filter in
                             Text(filter.title).tag(filter)
@@ -242,6 +259,9 @@ struct ContentView: View {
                         selectedDevice: selectedDevice,
                         onOpenControls: openSelectedDeviceControls,
                         onToggleBoot: toggleSelectedBootState,
+                        isLogStreaming: selectedDevice.map { logStore.isStreaming(udid: $0.udid) } ?? false,
+                        onOpenLogs: openLogWindow,
+                        onToggleLogs: toggleSelectedLogs,
                         onClone: { cloneTarget = selectedDevice },
                         onDelete: { deleteTarget = selectedDevice },
                         onCopyUDID: copySelectedUDID
@@ -293,6 +313,15 @@ struct ContentView: View {
 
                     Button(device.isBooted ? L10n.t("Shutdown") : L10n.t("Boot")) {
                         performBootToggle(for: device)
+                    }
+
+                    Button(logStore.isStreaming(udid: device.udid) ? L10n.t("Stop Logs") : L10n.t("Start Logs")) {
+                        logStore.toggleStream(for: device)
+                    }
+                    .disabled(!device.isBooted && !logStore.isStreaming(udid: device.udid))
+
+                    Button(L10n.t("Open Simulator Logs")) {
+                        openLogWindow()
                     }
 
                     Button(L10n.t("Clone Device")) {
@@ -370,6 +399,10 @@ struct ContentView: View {
         LocationPlayerWindowCoordinator.openOrFocusWindow(for: udid, openWindow: openWindow)
     }
 
+    private func openLogWindow() {
+        openWindow(id: "simulator-logs")
+    }
+
     private func toggleSelectedBootState() {
         guard let selectedDevice else { return }
         performBootToggle(for: selectedDevice)
@@ -387,6 +420,11 @@ struct ContentView: View {
                 deviceStore.feedback = FeedbackMessage(level: .error, text: error.localizedDescription)
             }
         }
+    }
+
+    private func toggleSelectedLogs() {
+        guard let selectedDevice else { return }
+        logStore.toggleStream(for: selectedDevice)
     }
 
     private func copySelectedUDID() {
@@ -487,5 +525,5 @@ struct DeviceAvailabilityCell: View {
 }
 
 #Preview {
-    ContentView(deviceStore: .shared, libraryController: .shared)
+    ContentView(deviceStore: .shared, libraryController: .shared, logStore: .shared)
 }

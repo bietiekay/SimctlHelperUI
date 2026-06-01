@@ -244,6 +244,7 @@ final class DeviceStore: ObservableObject {
 
         devices = flattenedRecords
         applySorting()
+        SimulatorLogStore.shared.syncDevices(devices)
     }
 
     private func applySorting() {

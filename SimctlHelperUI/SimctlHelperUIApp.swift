@@ -37,10 +37,11 @@ struct SimctlHelperUIApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var deviceStore = DeviceStore.shared
     @StateObject private var libraryController = LocationLibraryController.shared
+    @StateObject private var logStore = SimulatorLogStore.shared
 
     var body: some Scene {
         Window(L10n.t("Device Overview"), id: "main") {
-            ContentView(deviceStore: deviceStore, libraryController: libraryController)
+            ContentView(deviceStore: deviceStore, libraryController: libraryController, logStore: logStore)
                 .background(
                     WindowObserverView { window in
                         LocationPlayerWindowCoordinator.assignMainWindowIdentifier(to: window)
@@ -66,6 +67,12 @@ struct SimctlHelperUIApp: App {
             DiagnosticsWindowView()
         }
         .defaultSize(width: 880, height: 520)
+
+        Window(L10n.t("Simulator Logs"), id: "simulator-logs") {
+            SimulatorLogWindowView(logStore: logStore, deviceStore: deviceStore)
+        }
+        .defaultSize(width: 1180, height: 760)
+
         .commands {
             AppCommandSet()
         }
@@ -129,6 +136,10 @@ private struct AppCommandSet: Commands {
         CommandGroup(after: .windowArrangement) {
             Button(L10n.t("Diagnostics")) {
                 openWindow(id: "diagnostics")
+            }
+
+            Button(L10n.t("Simulator Logs")) {
+                openWindow(id: "simulator-logs")
             }
         }
 
